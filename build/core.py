@@ -29,7 +29,7 @@ NF = {
     "pct": '0.0%;(0.0%);"–"',
     "pct2": '0.00%;(0.00%);"–"',
     "x": '0.00"x";(0.00"x");"–"',
-    "date": "dd-mmm-yyyy",
+    "date": "dd-mmm-yyyy;;\"–\"",
     "mon": "mmm-yy",
     "int": "0",
     "txt": "@",
@@ -37,6 +37,7 @@ NF = {
     "k": '#,##0,;(#,##0,);"–"',
     "yr": '0.0" yrs";(0.0" yrs");"–"',
     "mo": '0" mo";(0" mo");"–"',
+    "m": '#,##0.0,,"m";(#,##0.0,,"m");"–"',
 }
 
 thin = Side(style="thin", color=BORDER)
@@ -45,6 +46,14 @@ BOX = Border(left=thin, right=thin, top=thin, bottom=thin)
 TOPLINE = Border(top=Side(style="thin", color=INK))
 DTOP = Border(top=Side(style="thin", color=INK), bottom=Side(style="double", color=INK))
 BOTTOM_AMBER = Border(bottom=Side(style="medium", color=AMBER))
+
+
+def axis_font(ax, size=700, color="5B6675"):
+    """set tick-label font size (hundredths of a point) on a chart axis"""
+    from openpyxl.chart.text import RichText
+    from openpyxl.drawing.text import Paragraph, ParagraphProperties, CharacterProperties, RichTextProperties
+    cp = CharacterProperties(sz=size, solidFill=color)
+    ax.txPr = RichText(bodyPr=RichTextProperties(), p=[Paragraph(pPr=ParagraphProperties(defRPr=cp), endParaRPr=cp)])
 
 
 def fill(c):
@@ -260,6 +269,10 @@ class Sheet:
             pass
 
 
+import re as _re
+_LINK_RE = _re.compile(r"^(?:'[^']+'!\$?[A-Z]{1,3}\$?\d+|[A-Z][A-Z0-9_]*)$")
+
+
 class Builder:
     def __init__(self):
         self.wb = Workbook()
@@ -281,7 +294,7 @@ class Builder:
             cell.border = BOX
             return
         is_formula = isinstance(v, str)
-        link = is_formula and "!" in v
+        link = is_formula and bool(_LINK_RE.match(v.strip()))
         bold = style in ("total", "grand", "key")
         color = LINK_FG if link else INK
         cell.font = Font(name=FONT, size=10, bold=bold, color=color)
@@ -327,6 +340,8 @@ def header(b, sh, ncols_vis=None, start_link=True, period_hdr=True):
     # column widths
     ws.column_dimensions["A"].width = 2
     ws.column_dimensions["B"].width = sh.width_label
+    if sh.kind == "free":
+        ws.column_dimensions["D"].width = 18
     if sh.kind == "free" and sh.n:
         ws.column_dimensions["C"].width = 9
         ws.column_dimensions["D"].width = 15
@@ -391,3 +406,8 @@ def header(b, sh, ncols_vis=None, start_link=True, period_hdr=True):
     ws.oddFooter.right.text = "Page &P of &N"
     if sh.kind == "annual":
         ws.print_title_rows = "1:8"
+    if sh.kind in ("m48", "m288"):
+        ws.print_title_rows = "1:8"
+        ws.print_title_cols = "A:D"
+        ws.page_setup.fitToWidth = 4 if sh.kind == "m48" else 1
+        ws.page_setup.fitToHeight = 0

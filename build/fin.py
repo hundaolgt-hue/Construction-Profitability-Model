@@ -23,7 +23,7 @@ def build_fin(b):
     T = lambda key, i: f"'20_Timeline'!{pc(i)}{b.TL[key]}"
     C23 = "23_Construction"
     cmr = b.sheets[C23].rows
-    SUMC = lambda key, i: f"SUMIFS('{C23}'!$E${cmr[key]}:${pc(MON_C)}${cmr[key]},'{C23}'!$E${cmr['PIDX']}:${pc(MON_C)}${cmr['PIDX']},{i})"
+    SUMC = lambda key, i: f"SUMIFS('{C23}'!$E${cmr[key]}:${pc(MON_C)}${cmr[key]},'{C23}'!$E${cmr['PIDX']}:${pc(MON_C)}${cmr['PIDX']},{T('T_P', i)})"
     RV = lambda k, i: X("24_Revenue", k, i)
     OX = lambda k, i: X("25_Opex", k, i)
     AS = lambda k, i: X("26_Assets", k, i)
@@ -363,28 +363,32 @@ def build_sens(b):
     se.sec("Live outputs", "ውጤቶች")
     outs = [("O_EIRR", "Equity IRR", "EIRR", "pct"), ("O_PIRR", "Project IRR", "PIRR", "pct"), ("O_PNPV", "Project NPV", "PNPV", "n0"),
             ("O_POC", "Profit on cost", "POC", "pct"), ("O_DSCR", "Minimum DSCR", "MIN_DSCR", "x"),
-            ("O_PEAK", "Peak debt", "PEAK_DEBT", "n0"), ("O_TDC", "Total development cost", "TDC", "n0")]
+            ("O_PEAK", "Peak debt", "PEAK_DEBT", "n0"), ("O_TDC", "Total development cost", "TDC", "n0"),
+            ("O_VERD", "Verdict", "VERDICT", "gen")]
     for k, lab, f, fmt in outs:
-        se.scalar(k, lab, f, fmt=fmt, unit="", style="key")
+        se.scalar(k, lab, f, fmt=fmt, unit="ETB" if fmt == "n0" else "", style="key")
     se.gap()
     out_cells = {k: f"$D${se.scal[k]}" for k, *_ in outs}
 
     def dt_block(title, inp, vals, cols, fmtv="pct", am=None, label_fmt=None):
-        """one-way data table: values in col C, outputs in D.. ; returns (first_row, rows list)"""
+        """one-way data table: label row, formula row, then input values in col C and outputs in D.."""
         se.sec(title, am)
-        r0 = se.r
-        se.r += 1 + len(vals)
+        rl = se.r
+        r0 = rl + 1
+        se.r += 2 + len(vals)
 
-        def _do(_r, r0=r0):
-            hdr = ["Flex value"] + [c[0] for c in cols]
-            ws.cell(r0, 3, "Flex value").font = font(9, True, NAVY)
+        def _do(_r, r0=r0, rl=rl):
+            ws.cell(rl, 3, "Input value").font = font(9, True, SEC)
+            ws.cell(rl, 2, "Live Data Table – recalculates automatically (press F9 if Excel is set to 'except tables')").font = F_NOTE
             for j, (lab, ref, fmt) in enumerate(cols):
+                lc = ws.cell(rl, 4 + j, lab)
+                lc.font = font(9, True, NAVY)
+                lc.alignment = Alignment(horizontal="right", wrap_text=True)
                 cc = ws.cell(r0, 4 + j, "=" + ref)
                 cc.number_format = NF[fmt]
-                cc.font = font(9, True, NAVY)
-                ws.cell(r0 - 0, 4 + j).fill = fill("EEF1F5")
-                ws.cell(r0 + len(vals) + 0, 4 + j)
-            ws.cell(r0, 2, "Output → / value ↓ (Data Table – refreshes with F9 in Excel)").font = F_NOTE
+                cc.font = font(9, True, SEC)
+                cc.fill = fill("EEF1F5")
+            ws.cell(r0, 3, "base →").font = font(9, False, SEC)
             for k, v in enumerate(vals):
                 cc = ws.cell(r0 + 1 + k, 3, v)
                 cc.number_format = NF[fmtv]
@@ -442,9 +446,9 @@ def build_sens(b):
     se.raw(_two)
     # scenario grid (live, data table on the scenario override)
     b.SGRID = dt_block("Scenario grid – all four scenarios side by side (live)", b.FLEX["SCEN_OVR"], [1, 2, 3, 4],
-                       [("Equity IRR", out_cells["O_EIRR"], "pct"), ("Project NPV", out_cells["O_PNPV"], "n0"),
+                       [("Equity IRR", out_cells["O_EIRR"], "pct"), ("Project NPV (ETB m)", out_cells["O_PNPV"], "m"),
                         ("Profit on cost", out_cells["O_POC"], "pct"), ("Min DSCR", out_cells["O_DSCR"], "x"),
-                        ("Peak debt", out_cells["O_PEAK"], "n0")], fmtv="int")
+                        ("Peak debt (ETB m)", out_cells["O_PEAK"], "m")], fmtv="int")
     se.note("Rows 1–4 = Base, Upside, Downside, Lender. Values recalculate automatically; in Excel set calculation to Automatic (not 'except tables') or press F9.")
 
     # tornado
@@ -525,7 +529,7 @@ def build_sens(b):
             ws.cell(gr + 1, gc, "Flex").font = font(9, True, SEC)
             oc = ws.cell(gr + 1, gc + 1, "=" + out)
             oc.font = font(9, True, NAVY)
-            oc.number_format = NF["n2"]
+            oc.number_format = NF["m"] if key == "BE_PRICE_NPV" else NF["n2"]
             ws.cell(gr + 1, gc + 2, "Sign change").font = font(9, True, SEC)
             for j, v in enumerate(vals):
                 cc = ws.cell(gr + 2 + j, gc, v)
@@ -535,7 +539,7 @@ def build_sens(b):
             ws[f"{CL(gc + 1)}{gr + 2}"] = DataTableFormula(ref=ref, r1=b.FLEX[flex].replace("$", ""))
             b.DT_RANGES.append(("52_Sensitivity", ref))
             for j in range(21):
-                ws.cell(gr + 2 + j, gc + 1).number_format = NF["n2"]
+                ws.cell(gr + 2 + j, gc + 1).number_format = NF["m"] if key == "BE_PRICE_NPV" else NF["n2"]
                 if j > 0:
                     a1, a0 = f"{CL(gc + 1)}{gr + 2 + j}", f"{CL(gc + 1)}{gr + 1 + j}"
                     ws.cell(gr + 2 + j, gc + 2, f"=IF(({a0}-{target})*({a1}-{target})<=0,IF({a1}<>{a0},1,0),0)").number_format = NF["int"]
@@ -603,7 +607,7 @@ def build_sens(b):
             unit="x", tot=None, n=ANN_N)
     dfh = f"$E${se.rows['DFH_ROW']}:$R${se.rows['DFH_ROW']}"
     se.scalar("ENPVH", "Equity NPV @ hurdle", f"SUMPRODUCT({ann('50_Returns', 'ECF')},{dfh})", name="ENPV_H")
-    se.line("HARDP", "Hard cost + contingency by period", lambda i: f"SUMIFS('23_Construction'!$E${b.sheets['23_Construction'].rows['HARD']}:${pc(MON_C)}${b.sheets['23_Construction'].rows['HARD']},'23_Construction'!$E${b.sheets['23_Construction'].rows['PIDX']}:${pc(MON_C)}${b.sheets['23_Construction'].rows['PIDX']},{i})*(1+CONT_PCT)",
+    se.line("HARDP", "Hard cost + contingency by period", lambda i: f"SUMIFS('23_Construction'!$E${b.sheets['23_Construction'].rows['HARD']}:${pc(MON_C)}${b.sheets['23_Construction'].rows['HARD']},'23_Construction'!$E${b.sheets['23_Construction'].rows['PIDX']}:${pc(MON_C)}${b.sheets['23_Construction'].rows['PIDX']},'20_Timeline'!{pc(i)}{b.TL['T_P']})*(1+CONT_PCT)",
             fmt="n0", unit="ETB", n=ANN_N)
     se.scalar("PVH", "PV @ hurdle of hard cost + contingency", f"SUMPRODUCT($E${se.rows['HARDP']}:$R${se.rows['HARDP']},{dfh})",
               name="PV_HARD_H")
@@ -618,7 +622,7 @@ def build_sens(b):
             fmt="n2", unit="x", tot="max", n=ANN_N)
     se.scalar("OCCMX", "Binding occupancy multiplier", f"MAX(0,$D${se.rows['OCCM']})", fmt="n2", unit="x", name="BE_OCC_MULT")
     se.line("RATEM", "Rate at which DSCR = covenant (by year)",
-            lambda i: (0 if i <= 4 else
+            lambda i: (99 if i <= 4 else
                        f"IF(AND('27_Loan'!{pc(i)}{ln['A_INTP']}>0,'43_Ratios'!{pc(i)}{ra['DS']}>0),RATE_EFF*('43_Ratios'!{pc(i)}{ra['CFADS']}/DSCR_COV-'27_Loan'!{pc(i)}{ln['A_PRIN']})/'27_Loan'!{pc(i)}{ln['A_INTP']},99)"),
             fmt="pct2", unit="%", tot="min", n=ANN_N)
     se.scalar("RATEX", "Binding break-even rate", f"IF($D${se.rows['RATEM']}=99,0,MAX(0,$D${se.rows['RATEM']}))", fmt="pct2",

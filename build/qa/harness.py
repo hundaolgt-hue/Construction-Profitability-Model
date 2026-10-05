@@ -29,7 +29,8 @@ def input_cell(wb, name, col="E"):
     return sh, f"{col}{row}"
 
 
-def make_variant(src, out, mode=None, data=None, scen=None, inputs=None, flex=None, strip_dt=True, col=None):
+def make_variant(src, out, mode=None, data=None, scen=None, inputs=None, flex=None, strip_dt=True, col=None, cells=None,
+                 paste=None):
     wb = load_workbook(src)
     st = wb["00_Start"]
     if mode is not None:
@@ -46,6 +47,10 @@ def make_variant(src, out, mode=None, data=None, scen=None, inputs=None, flex=No
         d = wb.defined_names[k]
         sh, ref = list(d.destinations)[0]
         wb[sh][ref.replace("$", "")] = v
+    for (sh, co), v in (cells or {}).items():
+        wb[sh][co] = v
+    for (sh, co), v in (paste or {}).items():
+        wb[sh][co] = v
     if strip_dt:
         for ws in wb.worksheets:
             for row in ws.iter_rows():

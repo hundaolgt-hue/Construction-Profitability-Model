@@ -31,7 +31,7 @@ def build_engine(b):
     tl.line("T_LABEL", "Period label", lambda i: "§" + PERIOD_LABELS[i - 1], fmt="gen", unit="", tot=None)
     tl.line("T_C", "Construction-year index", lambda i: i if i <= 4 else 0, fmt="int", unit="no.", tot=None)
     tl.line("T_Y", "Operating-year index", lambda i: Y(i), fmt="int", unit="no.", tot=None)
-    tl.line("T_MONTHS", "Months in period", lambda i: f"MAX(0,MIN(12,CONSTR_EFF-12*({i}-1)))" if C4(i) else 12,
+    tl.line("T_MONTHS", "Months in period", lambda i: f"MAX(0,MIN(12,CONSTR_EFF-12*({tl.c('T_C', i)}-1)))" if C4(i) else 12,
             fmt="int", unit="months")
     tl.line("T_ACTIVE", "Period active flag", lambda i: f"IF({tl.c('T_MONTHS', i)}>0,1,0)", fmt="int", unit="flag", tot=None)
     tl.line("T_CF", "Construction flag", lambda i: f"IF(AND({tl.c('T_C', i)}>0,{tl.c('T_MONTHS', i)}>0),1,0)" if C4(i) else 0,
@@ -39,11 +39,11 @@ def build_engine(b):
     tl.line("T_OPF", "Operating flag", lambda i: f"IF(AND({tl.c('T_Y', i)}>=1,{tl.c('T_Y', i)}<=OPS_YEARS),1,0)",
             fmt="int", unit="flag", tot="sum")
     tl.line("T_COD", "Completion (COD) period flag",
-            lambda i: f"IF(AND({tl.c('T_MONTHS', i)}>0,MIN(12*{i},CONSTR_EFF)=CONSTR_EFF),1,0)" if C4(i) else 0,
+            lambda i: f"IF(AND({tl.c('T_MONTHS', i)}>0,MIN(12*{tl.c('T_C', i)},CONSTR_EFF)=CONSTR_EFF),1,0)" if C4(i) else 0,
             fmt="int", unit="flag", tot="sum")
-    tl.line("T_STARTM", "First month index", lambda i: f"12*({i}-1)+1" if C4(i) else f"CONSTR_EFF+12*({Y(i)}-1)+1",
+    tl.line("T_STARTM", "First month index", lambda i: f"12*({tl.c('T_C', i)}-1)+1" if C4(i) else f"CONSTR_EFF+12*({tl.c('T_Y', i)}-1)+1",
             fmt="int", unit="no.", tot=None)
-    tl.line("T_ENDM", "Last month index", lambda i: f"MIN(12*{i},CONSTR_EFF)" if C4(i) else f"CONSTR_EFF+12*{Y(i)}",
+    tl.line("T_ENDM", "Last month index", lambda i: f"MIN(12*{tl.c('T_C', i)},CONSTR_EFF)" if C4(i) else f"CONSTR_EFF+12*{tl.c('T_Y', i)}",
             fmt="int", unit="no.", tot=None)
     tl.line("T_END", "Period end date", lambda i: f"EDATE(START_DATE,{tl.c('T_ENDM', i)})-1", fmt="date", unit="date", tot=None)
     tl.line("T_YF", "Years from start (end of period)", lambda i: f"({tl.c('T_END', i)}+1-START_DATE)/365", fmt="n2",
@@ -63,6 +63,7 @@ def build_engine(b):
     tl.scalar("CODD", "Completion (COD) date", "EDATE(START_DATE,CONSTR_EFF)-1", fmt="date", unit="date", name="COD_DATE")
     tl.scalar("ENDD", "End of operating horizon (O10)", "EDATE(START_DATE,CONSTR_EFF+12*OPS_YEARS)-1", fmt="date", unit="date",
               name="END_DATE")
+    b.TL_PRINT_END = tl.r
     tl.gap()
     tl.sec("Monthly timeline (construction up to 48 months + 240 months of loan life)", "ወርሃዊ የጊዜ ሰሌዳ")
     M = lambda key, i: f"'20_Timeline'!{pc(i)}{tl.rows[key]}"
@@ -284,24 +285,24 @@ def build_engine(b):
     cm.line("USERP", "User % profile (input row – used if profile = User %)", lambda i: 0, fmt="pct", unit="%", style="input")
     cm.line("IDX", "Rapha Construction Cost Index (input row, optional)", lambda i: 0, fmt="n1", unit="index", style="input", tot=None)
     cm.line("CUM", "Cumulative progress",
-            lambda i: (f"IF({i}>=CONSTR_EFF,1,IF(SCURVE_TYPE=1,({i}/CONSTR_EFF)^SCURVE_A/(({i}/CONSTR_EFF)^SCURVE_A+(1-{i}/CONSTR_EFF)^SCURVE_A),"
-                       f"IF(OR(SCURVE_TYPE=2,USER_TOT<=0),{i}/CONSTR_EFF,SUM($E${cm.rows['USERP']}:{m('USERP', i)})/USER_TOT)))"),
+            lambda i: (f"IF({TT('M_T', i)}>=CONSTR_EFF,1,IF(SCURVE_TYPE=1,({TT('M_T', i)}/CONSTR_EFF)^SCURVE_A/(({TT('M_T', i)}/CONSTR_EFF)^SCURVE_A+(1-{TT('M_T', i)}/CONSTR_EFF)^SCURVE_A),"
+                       f"IF(OR(SCURVE_TYPE=2,USER_TOT<=0),{TT('M_T', i)}/CONSTR_EFF,SUM($E${cm.rows['USERP']}:{m('USERP', i)})/USER_TOT)))"),
             fmt="pct", unit="%", tot=None)
     cm.line("S", "Monthly progress", lambda i: f"{m('CUM', i)}-{prev('CUM', i)}", fmt="pct", unit="%")
     cm.line("ESC", "Escalation factor",
-            lambda i: f"IF(AND(INDEX_USE=1,INDEX_BASE>0,{m('IDX', i)}>0),{m('IDX', i)}/INDEX_BASE,(1+ESC_EFF)^(({i}-0.5)/12))",
+            lambda i: f"IF(AND(INDEX_USE=1,INDEX_BASE>0,{m('IDX', i)}>0),{m('IDX', i)}/INDEX_BASE,(1+ESC_EFF)^(({TT('M_T', i)}-0.5)/12))",
             fmt="n2", unit="x", tot=None)
     cm.sec("Development cost accrual (IAS 2 / 16 / 40 / 23)", "የልማት ወጪ")
     cm.line("HARD", "Hard cost (escalated)", lambda i: f"HARD_BASE*{m('S', i)}*{m('ESC', i)}")
     cm.line("CONT", "Contingency", lambda i: f"{m('HARD', i)}*CONT_PCT")
-    cm.line("DESIGN", "Design fees", lambda i: f"DESIGN_PCT*HARD_BASE*(IF({i}=1,DESIGN_UPFRONT,0)+(1-DESIGN_UPFRONT)*{m('S', i)})")
+    cm.line("DESIGN", "Design fees", lambda i: f"DESIGN_PCT*HARD_BASE*(IF({TT('M_T', i)}=1,DESIGN_UPFRONT,0)+(1-DESIGN_UPFRONT)*{m('S', i)})")
     cm.line("SUPERV", "Supervision", lambda i: f"SUPERV_PCT*{m('HARD', i)}")
     cm.line("PERMIT", "Permits & fees", lambda i: "PERMITS" if i == 1 else 0)
-    cm.line("FFE", "FF&E / furniture", lambda i: f"IF({i}=CONSTR_EFF,FFE,0)")
+    cm.line("FFE", "FF&E / furniture", lambda i: f"IF({TT('M_T', i)}=CONSTR_EFF,FFE,0)")
     cm.line("LANDACC", "Land (recognised month 1)", lambda i: "LAND_VALUE" if i == 1 else 0)
     cm.line("ARRF", "Arrangement fee (on IDC-excluded facility)", lambda i: "ARR_FEE*DEBT_CAP" if i == 1 else 0)
     cm.line("COMF", "Commitment fee on undrawn facility",
-            lambda i: f"IF({i}<=CONSTR_EFF,MAX(0,DEBT_CAP-{prev('CUMDEBT', i)})*COMMIT_FEE/12,0)")
+            lambda i: f"IF({TT('M_T', i)}<=CONSTR_EFF,MAX(0,DEBT_CAP-{prev('CUMDEBT', i)})*COMMIT_FEE/12,0)")
     cm.line("IDC", "Interest during construction (from loan schedule)", lambda i: X("27_Loan", "CAPC", i))
     cm.line("ACC", "Total capex accrual", lambda i: "+".join(m(k, i) for k in ("HARD", "CONT", "DESIGN", "SUPERV", "PERMIT", "FFE",
                                                                                   "LANDACC", "ARRF", "COMF", "IDC")),
@@ -321,24 +322,24 @@ def build_engine(b):
     cm.line("NEED", "TOTAL FUNDING NEED", lambda i: f"{m('NEEDX', i)}+{m('FINC', i)}", style="total")
     cm.line("CUMNEED", "Cumulative funding need", lambda i: f"{prev('CUMNEED', i)}+{m('NEED', i)}", tot="max")
     cm.sec("Presales (contracts signed during construction)", "ቅድመ-ሽያጭ")
-    cm.line("BAND", "Construction year (presale band)", lambda i: f"ROUNDUP({i}/12,0)", fmt="int", unit="no.", tot=None)
+    cm.line("BAND", "Construction year (presale band)", lambda i: f"ROUNDUP({TT('M_T', i)}/12,0)", fmt="int", unit="no.", tot=None)
     cm.line("MIB", "Construction months in this band",
             lambda i: f"MAX(1,MIN(12,CONSTR_EFF-12*({m('BAND', i)}-1)))", fmt="int", unit="no.", tot=None)
     cm.line("PSA", "Area presold", lambda i: f"{m('CF', i)}*SALE_AREA*INDEX(PS_EFF,{m('BAND', i)})/{m('MIB', i)}", unit="m²")
-    cm.line("PRC", "Sale price (escalated)", lambda i: f"BLEND_PRICE*(1+PESC_EFF)^(({i}-1)/12)", unit="ETB/m²", tot=None)
+    cm.line("PRC", "Sale price (escalated)", lambda i: f"BLEND_PRICE*(1+PESC_EFF)^(({TT('M_T', i)}-1)/12)", unit="ETB/m²", tot=None)
     cm.line("CV", "Contract value signed (net of default allowance)", lambda i: f"{m('PSA', i)}*{m('PRC', i)}*(1-DEFAULT_EFF)")
     cm.line("CUMCV", "Cumulative contract value", lambda i: f"{prev('CUMCV', i)}+{m('CV', i)}", tot="last")
     cm.line("CUMAREA", "Cumulative area presold", lambda i: f"{prev('CUMAREA', i)}+{m('PSA', i)}", unit="m²", tot="last")
     cm.line("DP", "Collections – down payments", lambda i: f"PAY_DP*{m('CV', i)}")
     cm.line("CUMINST", "Cumulative milestone instalments due", lambda i: f"PAY_INST*{m('CUMCV', i)}*{m('CUM', i)}", tot="last")
     cm.line("INST", "Collections – milestone instalments", lambda i: f"{m('CUMINST', i)}-{prev('CUMINST', i)}")
-    cm.line("HAND", "Collections – balance at handover", lambda i: f"IF({i}=CONSTR_EFF,(1-PAY_DP-PAY_INST)*{m('CUMCV', i)},0)")
+    cm.line("HAND", "Collections – balance at handover", lambda i: f"IF({TT('M_T', i)}=CONSTR_EFF,(1-PAY_DP-PAY_INST)*{m('CUMCV', i)},0)")
     cm.line("COLL", "Total presale collections", lambda i: f"{m('DP', i)}+{m('INST', i)}+{m('HAND', i)}", style="total")
     cm.line("CUMREV", "Cumulative revenue recognised (IFRS 15)",
-            lambda i: f"IF(REV_POLICY=2,{m('CUMCV', i)}*{m('CUM', i)},IF({i}>=CONSTR_EFF,{m('CUMCV', i)},0))", tot="last")
+            lambda i: f"IF(REV_POLICY=2,{m('CUMCV', i)}*{m('CUM', i)},IF({TT('M_T', i)}>=CONSTR_EFF,{m('CUMCV', i)},0))", tot="last")
     cm.line("REV", "Presale revenue recognised", lambda i: f"{m('CUMREV', i)}-{prev('CUMREV', i)}")
     cm.line("CUMCOGS", "Cumulative cost of sales released (IAS 2)",
-            lambda i: f"IF(SALE_AREA>0,TDC_INV*{m('CUMAREA', i)}/SALE_AREA*IF(REV_POLICY=2,{m('CUM', i)},IF({i}>=CONSTR_EFF,1,0)),0)",
+            lambda i: f"IF(SALE_AREA>0,TDC_INV*{m('CUMAREA', i)}/SALE_AREA*IF(REV_POLICY=2,{m('CUM', i)},IF({TT('M_T', i)}>=CONSTR_EFF,1,0)),0)",
             tot="last")
     cm.line("COGS", "Presale cost of sales", lambda i: f"{m('CUMCOGS', i)}-{prev('CUMCOGS', i)}")
     cm.sec("Funding waterfall: (1) presales → (2) equity → (3) debt → (4) top-up / gap", "የገንዘብ ምንጭ ቅደም ተከተል")
@@ -386,6 +387,63 @@ def build_engine(b):
     ln = Sheet(b, "27_Loan", "27 · Loan – amortization schedule", "የብድር ክፍያ ሰንጠረዥ", TAB_FIN, kind="m288", width_label=48)
     L = lambda key, i: ln.c(key, i)
     lp = lambda key, i: (ln.c(key, i - 1) if i > 1 else "0")
+    # annual roll-up block lives on a separate annual sheet section (below) -> use helper sheet rows
+
+    ln.sec("Annual roll-up (C1–C4, O1–O10)", "ዓመታዊ ማጠቃለያ")
+    SUMP = lambda key, i: f"SUMIFS($E${ln.rows[key]}:${pc(MON_L)}${ln.rows[key]},$E${ln.rows['PIDX']}:${pc(MON_L)}${ln.rows['PIDX']},{T('T_P', i)})"
+    ATM = lambda key, i: f"SUMIFS($E${ln.rows[key]}:${pc(MON_L)}${ln.rows[key]},$E${ln.rows['T']}:${pc(MON_L)}${ln.rows['T']},{T('T_ENDM', i)})"
+    ln.line("A_LBL", "Period", lambda i: "§" + PERIOD_LABELS[i - 1], fmt="gen", unit="", tot=None, n=ANN_N)
+    ln.line("A_DRAW", "Drawdowns", lambda i: SUMP("DRAW", i), n=ANN_N)
+    ln.line("A_CAPC", "IDC capitalised (construction)", lambda i: SUMP("CAPC", i), n=ANN_N)
+    ln.line("A_CAPG", "Interest capitalised (grace)", lambda i: SUMP("CAPG", i), n=ANN_N)
+    ln.line("A_INTP", "Interest paid", lambda i: SUMP("INTP", i), n=ANN_N)
+    ln.line("A_INTE", "Interest expense (P&L)", lambda i: f"{ln.c('A_INTP', i)}+{ln.c('A_CAPG', i)}", n=ANN_N)
+    ln.line("A_PRIN", "Scheduled principal", lambda i: SUMP("PRIN", i), n=ANN_N)
+    ln.line("A_SWP", "Cash sweep prepayment", lambda i: SUMP("SWP", i), n=ANN_N)
+    ln.line("A_DS", "Debt service (interest paid + scheduled principal)", lambda i: f"{ln.c('A_INTP', i)}+{ln.c('A_PRIN', i)}",
+            n=ANN_N, style="total")
+    ln.line("A_CLOSE", "Closing loan balance", lambda i: ATM("CLOSE", i), n=ANN_N, tot="last", style="total")
+    ln.line("A_OPEN", "Opening loan balance", lambda i: ln.c("A_CLOSE", i - 1) if i > 1 else 0, n=ANN_N, tot=None)
+    ln.line("A_LSPR", "Land lease principal paid", lambda i: SUMP("LS_PR", i), n=ANN_N)
+    ln.line("A_LSINT", "Land lease interest", lambda i: SUMP("LS_INT", i), n=ANN_N)
+    ln.line("A_LSREC", "Lease liability recognised", lambda i: SUMP("LS_REC", i), n=ANN_N)
+    ln.line("A_LSCL", "Closing lease liability", lambda i: ATM("LS_CLOSE", i), n=ANN_N, tot="last")
+
+    ln.gap()
+    ln.sec("Loan scalars and lender summary", "የብድር ማጠቃለያ")
+    ln.scalar("FM", "Months between repayments", "CHOOSE(FREQ,1,3,12)", fmt="int", unit="months", name="FREQ_M")
+    ln.scalar("TM", "Tenor after completion", "TENOR_Y*12", fmt="int", unit="months", name="TENOR_M")
+    ln.scalar("NP", "Number of scheduled repayments", "MAX(0,INT((TENOR_M-GRACE_M)/FREQ_M))", fmt="int", unit="no.", name="N_PAY")
+    ln.scalar("LI", "Annual lease instalment", "IF(LEASE_N>0,LAND_VALUE*(1-LEASE_DP)/LEASE_N,0)*IF(LAND_TYPE=1,1,0)",
+              name="LEASE_INST")
+    ln.scalar("LDR", "Total drawdowns", lambda: f"$D${ln.rows['DRAW']}", name="LN_DRAWS")
+    ln.scalar("LIDC", "Total interest capitalised (IDC + grace)", lambda: f"$D${ln.rows['CAPC']}+$D${ln.rows['CAPG']}", name="LN_CAPINT")
+    ln.scalar("LINT", "Total interest (all)", lambda: f"$D${ln.rows['INT']}", name="LN_INT_TOT", style="key")
+    ln.scalar("LPR", "Total principal repaid (scheduled + sweep)", lambda: f"$D${ln.rows['PRIN']}+$D${ln.rows['SWP']}", name="LN_PRIN_TOT")
+    ln.scalar("PEAK", "Peak debt (incl. capitalised interest)", lambda: f"$D${ln.rows['CLOSE']}", name="PEAK_DEBT", style="key")
+    ln.scalar("B0", "Balance at start of repayment", lambda: f"$D${ln.rows['B0']}", name="LN_B0")
+    ln.scalar("AVL", "Average life after completion", lambda: "IF(LN_PRIN_TOT>0,{}/LN_PRIN_TOT,0)".format(f"$D${ln.rows['KP']}"),
+              fmt="n1", unit="years", name="LN_AVG_LIFE")
+    ln.scalar("TLAST", "Final repayment month index", lambda: f"$D${ln.rows['TP']}", fmt="int", unit="no.", name="LN_TLAST")
+    ln.scalar("FRD", "Final repayment date", "IF(LN_TLAST>0,EDATE(START_DATE,LN_TLAST)-1,0)", fmt="date", unit="date",
+              name="LN_FINAL_DATE")
+    ln.scalar("TFIRST", "First scheduled repayment month", lambda: f"IF($D${ln.rows['TF']}=999,0,$D${ln.rows['TF']})", fmt="int",
+              unit="no.", name="LN_TFIRST")
+    ln.scalar("INSTAL", "Instalment at first scheduled repayment",
+              lambda: f"IF(LN_TFIRST>0,INDEX(E{ln.rows['DS']}:{pc(MON_L)}{ln.rows['DS']},LN_TFIRST),0)", name="LN_INSTAL", style="key")
+    ln.scalar("INSTM", "Monthly-equivalent instalment", "LN_INSTAL/FREQ_M", name="LN_INSTAL_M", style="key")
+    ln.scalar("BTEN", "Balance outstanding at end of tenor",
+              lambda: f"SUMIFS(E{ln.rows['CLOSE']}:{pc(MON_L)}{ln.rows['CLOSE']},E{ln.rows['K']}:{pc(MON_L)}{ln.rows['K']},MIN(TENOR_M,{MON_L}-CONSTR_EFF))",
+              name="LN_BAL_TENOR")
+    ln.scalar("BEND", "Balance outstanding at end of O10", lambda: f"SUMIFS(E{ln.rows['CLOSE']}:{pc(MON_L)}{ln.rows['CLOSE']},E{ln.rows['K']}:{pc(MON_L)}{ln.rows['K']},12*OPS_YEARS)",
+              name="LN_BAL_O10")
+    ln.scalar("MINDS", "Min DSCR (from ratios)", lambda: XS("43_Ratios", "MIN"), fmt="x", unit="x")
+    ln.scalar("AVGDS", "Average DSCR", lambda: XS("43_Ratios", "AVG"), fmt="x", unit="x")
+    ln.scalar("LLCR", "LLCR at completion", lambda: XS("43_Ratios", "LLCR1"), fmt="x", unit="x")
+    ln.scalar("MICR", "Min interest cover (ICR)", lambda: XS("43_Ratios", "MINICR"), fmt="x", unit="x")
+    ln.scalar("MGR", "Max gearing", lambda: XS("43_Ratios", "MAXG"), fmt="pct", unit="%")
+    ln.gap()
+    b.LOAN_PRINT_END = ln.r
     ln.sec("Timing and rate", "ጊዜና የወለድ መጠን")
     ln.line("T", "Month t", lambda i: TT("M_T", i), fmt="int", unit="no.", tot=None)
     ln.line("CF", "Construction flag", lambda i: TT("M_CF", i), fmt="int", unit="flag")
@@ -434,68 +492,10 @@ def build_engine(b):
     ln.line("LS_REC", "Lease liability recognised", lambda i: "IF(LAND_TYPE=1,LAND_VALUE*(1-LEASE_DP),0)" if i == 1 else 0)
     ln.line("LS_OPEN", "Opening lease liability", lambda i: lp("LS_CLOSE", i), tot=None)
     ln.line("LS_FL", "Instalment month flag",
-            lambda i: f"IF(AND(LAND_TYPE=1,{i}>1,MOD({i}-1,12)=0,({i}-1)/12<=LEASE_N),1,0)", fmt="int", unit="flag")
+            lambda i: f"IF(AND(LAND_TYPE=1,{L('T', i)}>1,MOD({L('T', i)}-1,12)=0,({L('T', i)}-1)/12<=LEASE_N),1,0)", fmt="int", unit="flag")
     ln.line("LS_PR", "Lease instalment (principal)", lambda i: f"{L('LS_FL', i)}*MIN({L('LS_OPEN', i)},LEASE_INST)")
     ln.line("LS_INT", "Lease interest", lambda i: f"{L('LS_FL', i)}*{L('LS_OPEN', i)}*LEASE_INT")
     ln.line("LS_CLOSE", "Closing lease liability", lambda i: f"{L('LS_OPEN', i)}+{L('LS_REC', i)}-{L('LS_PR', i)}", tot="last")
-    ln.gap()
-    ln.sec("Loan scalars and lender summary", "የብድር ማጠቃለያ")
-    ln.scalar("FM", "Months between repayments", "CHOOSE(FREQ,1,3,12)", fmt="int", unit="months", name="FREQ_M")
-    ln.scalar("TM", "Tenor after completion", "TENOR_Y*12", fmt="int", unit="months", name="TENOR_M")
-    ln.scalar("NP", "Number of scheduled repayments", "MAX(0,INT((TENOR_M-GRACE_M)/FREQ_M))", fmt="int", unit="no.", name="N_PAY")
-    ln.scalar("LI", "Annual lease instalment", "IF(LEASE_N>0,LAND_VALUE*(1-LEASE_DP)/LEASE_N,0)*IF(LAND_TYPE=1,1,0)",
-              name="LEASE_INST")
-    ln.scalar("LDR", "Total drawdowns", f"$D${ln.rows['DRAW']}", name="LN_DRAWS")
-    ln.scalar("LIDC", "Total interest capitalised (IDC + grace)", f"$D${ln.rows['CAPC']}+$D${ln.rows['CAPG']}", name="LN_CAPINT")
-    ln.scalar("LINT", "Total interest (all)", f"$D${ln.rows['INT']}", name="LN_INT_TOT", style="key")
-    ln.scalar("LPR", "Total principal repaid (scheduled + sweep)", f"$D${ln.rows['PRIN']}+$D${ln.rows['SWP']}", name="LN_PRIN_TOT")
-    ln.scalar("PEAK", "Peak debt (incl. capitalised interest)", f"$D${ln.rows['CLOSE']}", name="PEAK_DEBT", style="key")
-    ln.scalar("B0", "Balance at start of repayment", f"$D${ln.rows['B0']}", name="LN_B0")
-    ln.scalar("AVL", "Average life after completion", "IF(LN_PRIN_TOT>0,{}/LN_PRIN_TOT,0)".format(f"$D${ln.rows['KP']}"),
-              fmt="n1", unit="years", name="LN_AVG_LIFE")
-    ln.scalar("TLAST", "Final repayment month index", f"$D${ln.rows['TP']}", fmt="int", unit="no.", name="LN_TLAST")
-    ln.scalar("FRD", "Final repayment date", "IF(LN_TLAST>0,EDATE(START_DATE,LN_TLAST)-1,0)", fmt="date", unit="date",
-              name="LN_FINAL_DATE")
-    ln.scalar("TFIRST", "First scheduled repayment month", f"IF($D${ln.rows['TF']}=999,0,$D${ln.rows['TF']})", fmt="int",
-              unit="no.", name="LN_TFIRST")
-    ln.scalar("INSTAL", "Instalment at first scheduled repayment",
-              f"IF(LN_TFIRST>0,INDEX(E{ln.rows['DS']}:{pc(MON_L)}{ln.rows['DS']},LN_TFIRST),0)", name="LN_INSTAL", style="key")
-    ln.scalar("INSTM", "Monthly-equivalent instalment", "LN_INSTAL/FREQ_M", name="LN_INSTAL_M", style="key")
-    ln.scalar("BTEN", "Balance outstanding at end of tenor",
-              f"SUMIFS(E{ln.rows['CLOSE']}:{pc(MON_L)}{ln.rows['CLOSE']},E{ln.rows['K']}:{pc(MON_L)}{ln.rows['K']},MIN(TENOR_M,{MON_L}-CONSTR_EFF))",
-              name="LN_BAL_TENOR")
-    ln.scalar("BEND", "Balance outstanding at end of O10", f"SUMIFS(E{ln.rows['CLOSE']}:{pc(MON_L)}{ln.rows['CLOSE']},E{ln.rows['K']}:{pc(MON_L)}{ln.rows['K']},12*OPS_YEARS)",
-              name="LN_BAL_O10")
-    ln.scalar("MINDS", "Min DSCR (from ratios)", lambda: XS("43_Ratios", "MIN"), fmt="x", unit="x")
-    ln.scalar("AVGDS", "Average DSCR", lambda: XS("43_Ratios", "AVG"), fmt="x", unit="x")
-    ln.scalar("LLCR", "LLCR at completion", lambda: XS("43_Ratios", "LLCR1"), fmt="x", unit="x")
-    ln.scalar("MICR", "Min interest cover (ICR)", lambda: XS("43_Ratios", "MINICR"), fmt="x", unit="x")
-    ln.scalar("MGR", "Max gearing", lambda: XS("43_Ratios", "MAXG"), fmt="pct", unit="%")
-    # annual roll-up block lives on a separate annual sheet section (below) -> use helper sheet rows
-    b.LOAN = ln
-
-    # Loan annual roll-up placed on 27_Loan? (monthly columns) -> use 28-style annual helper sheet '27_Loan' rows with n=14
-    ln.gap()
-    ln.sec("Annual roll-up (periods C1–C4, O1–O10 in columns E–R)", "ዓመታዊ ማጠቃለያ")
-    SUMP = lambda key, i: f"SUMIFS($E${ln.rows[key]}:${pc(MON_L)}${ln.rows[key]},$E${ln.rows['PIDX']}:${pc(MON_L)}${ln.rows['PIDX']},{i})"
-    ATM = lambda key, i: f"SUMIFS($E${ln.rows[key]}:${pc(MON_L)}${ln.rows[key]},$E${ln.rows['T']}:${pc(MON_L)}${ln.rows['T']},{T('T_ENDM', i)})"
-    ln.line("A_LBL", "Period", lambda i: "§" + PERIOD_LABELS[i - 1], fmt="gen", unit="", tot=None, n=ANN_N)
-    ln.line("A_DRAW", "Drawdowns", lambda i: SUMP("DRAW", i), n=ANN_N)
-    ln.line("A_CAPC", "IDC capitalised (construction)", lambda i: SUMP("CAPC", i), n=ANN_N)
-    ln.line("A_CAPG", "Interest capitalised (grace)", lambda i: SUMP("CAPG", i), n=ANN_N)
-    ln.line("A_INTP", "Interest paid", lambda i: SUMP("INTP", i), n=ANN_N)
-    ln.line("A_INTE", "Interest expense (P&L)", lambda i: f"{ln.c('A_INTP', i)}+{ln.c('A_CAPG', i)}", n=ANN_N)
-    ln.line("A_PRIN", "Scheduled principal", lambda i: SUMP("PRIN", i), n=ANN_N)
-    ln.line("A_SWP", "Cash sweep prepayment", lambda i: SUMP("SWP", i), n=ANN_N)
-    ln.line("A_DS", "Debt service (interest paid + scheduled principal)", lambda i: f"{ln.c('A_INTP', i)}+{ln.c('A_PRIN', i)}",
-            n=ANN_N, style="total")
-    ln.line("A_CLOSE", "Closing loan balance", lambda i: ATM("CLOSE", i), n=ANN_N, tot="last", style="total")
-    ln.line("A_OPEN", "Opening loan balance", lambda i: ln.c("A_CLOSE", i - 1) if i > 1 else 0, n=ANN_N, tot=None)
-    ln.line("A_LSPR", "Land lease principal paid", lambda i: SUMP("LS_PR", i), n=ANN_N)
-    ln.line("A_LSINT", "Land lease interest", lambda i: SUMP("LS_INT", i), n=ANN_N)
-    ln.line("A_LSREC", "Lease liability recognised", lambda i: SUMP("LS_REC", i), n=ANN_N)
-    ln.line("A_LSCL", "Closing lease liability", lambda i: ATM("LS_CLOSE", i), n=ANN_N, tot="last")
-
     return tl, ar, cx, cm, ln
 
 
@@ -506,7 +506,7 @@ def build_engine2(b):
     T = lambda key, i: f"'20_Timeline'!{pc(i)}{b.TL[key]}"
     C23 = "23_Construction"
     cmr = b.sheets[C23].rows
-    SUMC = lambda key, i: f"SUMIFS('{C23}'!$E${cmr[key]}:${pc(MON_C)}${cmr[key]},'{C23}'!$E${cmr['PIDX']}:${pc(MON_C)}${cmr['PIDX']},{i})"
+    SUMC = lambda key, i: f"SUMIFS('{C23}'!$E${cmr[key]}:${pc(MON_C)}${cmr[key]},'{C23}'!$E${cmr['PIDX']}:${pc(MON_C)}${cmr['PIDX']},{T('T_P', i)})"
     LN = "27_Loan"
 
     # =================================================================== 24 REVENUE
@@ -516,7 +516,7 @@ def build_engine2(b):
     rv.sec("Presale bands (effective after scenario, capped at 100%)", "የቅድመ-ሽያጭ ድርሻ")
     for n in range(1, 5):
         rv.scalar(f"PSR{n}", f"Presale band {n} – raw",
-                  f"PRESALE_{n}*D_PRESALE_F*IF(MAX(0,MIN(12,CONSTR_EFF-12*({n}-1)))>0,1,0)", fmt="pct", unit="%")
+                  f"PRESALE_{n}*D_PRESALE_F*IF({T('T_MONTHS', n)}>0,1,0)", fmt="pct", unit="%")
     rv.scalar("PSRT", "Presales raw total", "SUM(D{}:D{})".format(rv.scal["PSR1"], rv.scal["PSR4"]), fmt="pct", unit="%")
     for n in range(1, 5):
         rv.scalar(f"PSE{n}", f"Presale band {n} – effective",
@@ -540,7 +540,7 @@ def build_engine2(b):
                                         else (rp("PO_REM", i) if Y(i) == 5 else 0)), unit="m²")
     rv.line("PO_REM", "Unsold area remaining", lambda i: 0 if i <= 4 else f"{rp('PO_REM', i) if i > 5 else 'UNSOLD_AREA'}-{r('PO_AREA', i)}",
             unit="m²", tot="last")
-    rv.line("PO_PRICE", "Sale price (escalated)", lambda i: 0 if i <= 4 else f"BLEND_PRICE*(1+PESC_EFF)^(CONSTR_EFF/12+{Y(i)}-0.5)",
+    rv.line("PO_PRICE", "Sale price (escalated)", lambda i: 0 if i <= 4 else f"BLEND_PRICE*(1+PESC_EFF)^(CONSTR_EFF/12+{T('T_Y', i)}-0.5)",
             unit="ETB/m²", tot=None)
     rv.line("PO_REV", "Sales revenue = collections", lambda i: f"{r('PO_AREA', i)}*{r('PO_PRICE', i)}*(1-DEFAULT_EFF)")
     rv.line("PO_COGS", "Cost of sales", lambda i: f"IF(SALE_AREA>0,TDC_INV*{r('PO_AREA', i)}/SALE_AREA,0)")
@@ -560,18 +560,18 @@ def build_engine2(b):
     b.name("SALES_COLL_OPS", f"'24_Revenue'!$I${rv.rows['SC_OPS']}:$R${rv.rows['SC_OPS']}")
     rv.sec("Rent (IFRS 16 lessor)", "ኪራይ")
     rv.line("GPR", "Gross potential rent",
-            lambda i: 0 if i <= 4 else f"GPR_TODAY*D_RENT_F*(1+RESC_EFF)^(CONSTR_EFF/12+{Y(i)}-1)")
+            lambda i: 0 if i <= 4 else f"GPR_TODAY*D_RENT_F*(1+RESC_EFF)^(CONSTR_EFF/12+{T('T_Y', i)}-1)")
     rv.line("OCC", "Occupancy",
-            lambda i: 0 if i <= 4 else f"MIN(1,MAX(0,(CHOOSE(MIN({Y(i)},3),OCC_O1,OCC_O2,OCC_STAB)+D_OCC_ADD)*D_OCC_F))",
+            lambda i: 0 if i <= 4 else f"MIN(1,MAX(0,(CHOOSE(MIN({T('T_Y', i)},3),OCC_O1,OCC_O2,OCC_STAB)+D_OCC_ADD)*D_OCC_F))",
             fmt="pct", unit="%", tot=None)
     rv.line("RENT", "Rental income", lambda i: f"{r('GPR', i)}*{r('OCC', i)}", style="total")
     rv.line("KEYR", "Key money received", lambda i: f"IF(PROJECT_MODE=0,0,KEY_MONTHS*{r('RENT', i)}/12)" if i == 5 else 0)
     rv.line("KEYA", "Key money released to income",
-            lambda i: 0 if i <= 4 else f"IF({Y(i)}<=MAX(1,KEY_AMORT_Y),$D${rv.rows['KEYR']}/MAX(1,KEY_AMORT_Y),0)")
+            lambda i: 0 if i <= 4 else f"IF({T('T_Y', i)}<=MAX(1,KEY_AMORT_Y),$D${rv.rows['KEYR']}/MAX(1,KEY_AMORT_Y),0)")
     rv.line("KEYD", "Deferred key money (liability)", lambda i: f"{rp('KEYD', i)}+{r('KEYR', i)}-{r('KEYA', i)}", tot="last")
     rv.line("SCR", "Service charge recoveries", lambda i: f"SC_RECOV*{X('25_Opex', 'PROP', i)}")
     rv.line("OTH", "Other income",
-            lambda i: 0 if i <= 4 else f"IF(PROJECT_MODE=0,0,OTHER_INC*(1+OPEX_ESC)^({Y(i)}-1))")
+            lambda i: 0 if i <= 4 else f"IF(PROJECT_MODE=0,0,OTHER_INC*(1+OPEX_ESC)^({T('T_Y', i)}-1))")
     rv.line("TOTREV", "TOTAL REVENUE", lambda i: "+".join(r(k, i) for k in ("SALES_REV", "RENT", "KEYA", "SCR", "OTH")),
             style="grand")
     rv.line("NOI", "Net operating income of let property (NOI)",
@@ -583,7 +583,7 @@ def build_engine2(b):
     o = lambda key, i: ox.c(key, i)
     RV = lambda key, i: X("24_Revenue", key, i)
     ox.sec("Operating costs (positive = cost)", "ወጪዎች")
-    ox.line("ESC", "Opex escalation index (from today)", lambda i: 0 if i <= 4 else f"(1+OPEX_ESC)^(CONSTR_EFF/12+{Y(i)}-1)",
+    ox.line("ESC", "Opex escalation index (from today)", lambda i: 0 if i <= 4 else f"(1+OPEX_ESC)^(CONSTR_EFF/12+{T('T_Y', i)}-1)",
             fmt="n2", unit="x", tot=None)
     ox.line("PROP", "Property operating costs",
             lambda i: 0 if i <= 4 else f"IF(OPEX_METHOD=1,OPEX_PCT*{RV('RENT', i)},OPEX_M2*LET_AREA*{o('ESC', i)})*D_OPEX_F")
@@ -668,8 +668,8 @@ def build_engine2(b):
         k = f"REM{v}"
         remkeys.append(k)
         tx.line(k, f"Vintage {PERIOD_LABELS[v - 1]} – available at start",
-                (lambda v, k: lambda i: 0 if i <= v else (f"IF({i}-{v}>LCF_YEARS,0,{t('LNEW', v)})" if i == v + 1
-                                                           else f"IF({i}-{v}>LCF_YEARS,0,{tx.c(k, i - 1)}-{tx.c('USE' + str(v), i - 1)})"))(v, k),
+                (lambda v, k: lambda i: 0 if i <= v else (f"IF({T('T_P', i)}-{T('T_P', v)}>LCF_YEARS,0,{t('LNEW', v)})" if i == v + 1
+                                                           else f"IF({T('T_P', i)}-{T('T_P', v)}>LCF_YEARS,0,{tx.c(k, i - 1)}-{tx.c('USE' + str(v), i - 1)})"))(v, k),
                 tot=None)
     tx.line("AVAIL", "Losses available at start", lambda i: "+".join(t(k, i) for k in remkeys), tot=None)
     tx.line("USAGE", "Losses used", lambda i: f"MIN({t('AVAIL', i)},LCF_CAP*MAX(0,{t('TI', i)}))")
@@ -733,7 +733,7 @@ def build_engine2(b):
     wc.line("AR", "Rent receivables", lambda i: f"RECV_DAYS/365*({RV('RENT', i)}-{X('25_Opex', 'BAD', i)})", tot="last")
     wc.line("AP", "Opex payables", lambda i: f"PAY_DAYS/365*({X('25_Opex', 'TOT', i)}-{X('25_Opex', 'BAD', i)})", tot="last")
     wc.line("RETW", "Retention withheld", lambda i: SUMC("RETW", i))
-    wc.line("RETR", "Retention released", lambda i: f"IF({i}=RET_REL_P,RET_TOT,0)")
+    wc.line("RETR", "Retention released", lambda i: f"IF({T('T_P', i)}=RET_REL_P,RET_TOT,0)")
     wc.line("RET", "Retention payable", lambda i: f"{wp('RET', i)}+{w('RETW', i)}-{w('RETR', i)}", tot="last")
     wc.line("VAT", "VAT receivable", lambda i: X("29_VAT", "CLOSE", i), tot="last")
     wc.line("CL", "Contract liability", lambda i: RV("CLIAB", i), tot="last")

@@ -3,3 +3,12 @@ output/test*
 output/x/
 output/*.json
 *.pyc
+output/preview.xlsx
+output/sample*.xlsx
+output/render/
+output/y/
+tutorial/img/
+tutorial/review/
+tutorial/t.html
+tutorial/t.pdf
+tutorial/tutorial.html

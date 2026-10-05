@@ -53,6 +53,12 @@ def build(blank=False):
         for cond, code, fid in (("UNIT_SEL=1", '#,##0;(#,##0);"–"', 201), ("UNIT_SEL=3", '#,##0.0,,;(#,##0.0,,);"–"', 203)):
             dxf = DifferentialStyle(numFmt=NumberFormat(numFmtId=fid, formatCode=code))
             sh.ws.conditional_formatting.add(rng, Rule(type="expression", dxf=dxf, formula=[cond]))
+    for n, end in (("27_Loan", b.LOAN_PRINT_END), ("20_Timeline", b.TL_PRINT_END)):
+        ws = b.sheets[n].ws
+        ws.print_area = f"A1:R{end}"
+        ws.print_title_cols = None
+        ws.page_setup.fitToWidth = 1
+        ws.page_setup.fitToHeight = 0
     b.finalize_names()
     b.wb._sheets = [b.wb[n] for n in ORDER]
     b.wb.active = 0

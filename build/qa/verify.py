@@ -49,7 +49,8 @@ def check(name, a, b, tol=0.5):
 print("1. Loan schedule")
 ln = "27_Loan"
 ws = wb[ln]
-r_ev, r_open, r_rate, r_rem, r_prin, r_capg, r_bfv = (row_of(ln, s) for s in (
+m0 = row_of(ln, "Timing and rate")
+r_ev, r_open, r_rate, r_rem, r_prin, r_capg, r_bfv = (row_of(ln, s, m0) for s in (
     "Repayment event flag", "Opening balance", "Interest rate (p.a.)", "Remaining payments", "Scheduled principal",
     "Interest capitalised – grace", "Balloon amount"))
 freq = nm("FREQ_M")
@@ -82,7 +83,7 @@ else:
     roll = opening_y + get("Drawdowns") + get("IDC capitalised") + get("Interest capitalised (grace)") - get("Scheduled principal") - get("Cash sweep prepayment")
     check("loan roll-forward O3 (opening + draws + cap. interest − principal − sweep)", closing_y, roll, 1)
     # monthly IDC recursion check at month 6
-    r_draw, r_int = row_of(ln, "Drawdowns"), row_of(ln, "Interest accrued")
+    r_draw, r_int = row_of(ln, "Drawdowns", m0), row_of(ln, "Interest accrued", m0)
     t = max(range(1, 49), key=lambda m: ws.cell(r_draw, 4 + m).value or 0)
     print(f"  IDC test month t={t}")
     o, d, rr = ws.cell(r_open, 4 + t).value, ws.cell(r_draw, 4 + t).value, ws.cell(r_rate, 4 + t).value
