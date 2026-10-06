@@ -31,7 +31,7 @@ def render(xlsx, outdir, prefix, dpi=130):
             bot_band = [w["top"] for w in words if w["bottom"] > H * 0.94]
             bands[i + 1] = ((max(top_band) + 12) / H if top_band else 0, (min(bot_band) - 2) / H if bot_band else 1)
             t = (pg.extract_text() or "").split("\n")[0]
-            m = re.search(r"(\d\d_[A-Za-z]+)\s*$", t)
+            m = re.search(r"((?:\d\d|P\d)_[A-Za-z]+)\s*$", t)
             name = m.group(1) if m else "?"
             pages.setdefault(name, []).append(i + 1)
     out = {}

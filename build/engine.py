@@ -2,7 +2,7 @@
 from openpyxl.styles import Alignment
 from core import (Sheet, pc, CL, NF, ANN_N, MON_C, MON_L, font, fill, F_BODY, F_BOLD, F_UNIT, F_NOTE, F_AM,
                   NAVY, SEC, INK, BLUE, TEAL, VIOLET, AMBER, BOX, FILL_KEY, LINK_FG, BOTTOM_AMBER, PERIOD_LABELS)
-from inputs_def import USES, USES_AM, FLOORS, ELEMENTS, ELEMENTS_AM, EL_KEYS
+from inputs_def import FLOORS, ELEMENTS, ELEMENTS_AM, EL_KEYS
 
 TAB_ENGINE = "1F5FAD"
 TAB_FIN = "2E7D4F"
@@ -84,10 +84,9 @@ def build_engine(b):
 
     # =================================================================== 21 AREA
     ar = Sheet(b, "21_Area", "21 · Area programme", "የቦታና የወለል ስፋት ፕሮግራም", TAB_ENGINE, kind="free", n=16, width_label=44)
-    ar.sec("Floors (from Inputs block 3)", "ፎቆች")
+    ar.sec("Floors (from Inputs block 2)", "ፎቆች")
     ar.line("FL_NAME", "Floor", lambda i: "§" + FLOORS[i - 1], fmt="gen", unit="", tot=None)
     ar.line("FL_GROSS", "Gross floor area", lambda i: f"FL_A{i}", fmt="n0", unit="m²")
-    ar.line("FL_USE", "Use", lambda i: f"FL_U{i}", fmt="gen", unit="", tot=None)
     ar.line("FL_BASE", "Basement flag", lambda i: 1 if i <= 2 else 0, fmt="int", unit="flag", tot=None)
     ar.line("FL_HAS", "Floor built flag", lambda i: f"IF({ar.c('FL_GROSS', i)}>0,1,0)", fmt="int", unit="flag")
     ar.gap()
@@ -105,54 +104,35 @@ def build_engine(b):
     ar.scalar("FOOT", "Ground-floor footprint", f"G{ar.rows['FL_GROSS']}", unit="m²", name="FOOTPRINT")
     ar.scalar("FARA", "Actual FAR (above-ground GFA ÷ plot)", "IF(PLOT_AREA>0,GFA_ABOVE/PLOT_AREA,0)", fmt="n2", unit="x",
               name="FAR_ACT")
-    ar.scalar("BTOK", "Building type matches floors entered (1 = yes)",
-              "IF(AND(IF(BLDG_TYPE=5,1,IF(N_ABOVE=BLDG_TYPE,1,0))=1,IF(BASEMENT_YN=1,N_BASE>0,N_BASE=0)),1,0)",
-              fmt="int", unit="flag", name="BTYPE_OK")
     ar.gap()
-    ar.sec("By use – areas and disposition (IAS 2 sold · IAS 40 let · IAS 16 owner-occupied)", "በአገልግሎት")
-    U5 = lambda key, i: ar.c(key, i)
-    ur = {}
-    ar.line("U_NAME", "Use", lambda i: "§" + USES[i - 1] if i <= 5 else None, fmt="gen", unit="", tot=None, n=5)
-    ar.line("U_GROSS", "Gross area", lambda i: f"SUMIF($E${ar.rows['FL_USE']}:$T${ar.rows['FL_USE']},{U5('U_NAME', i)},$E${ar.rows['FL_GROSS']}:$T${ar.rows['FL_GROSS']})",
-            unit="m²", n=5)
-    code = lambda i: USES[i - 1][:3].upper()
-    ar.line("U_EFF", "Net-to-gross efficiency", lambda i: f"EFF_{code(i)}", fmt="pct", unit="%", tot=None, n=5)
-    ar.line("U_NET", "Net saleable / lettable area", lambda i: f"{U5('U_GROSS', i)}*{U5('U_EFF', i)}", unit="m²", n=5)
-    ar.line("U_SOLDF", "Share sold (IAS 2)", lambda i: f"CHOOSE(PROJECT_MODE+1,0,1-OWNUSE_PCT,0,SOLD_{code(i)})", fmt="pct",
-            unit="%", tot=None, n=5)
-    ar.line("U_OWNF", "Share owner-occupied (IAS 16)",
-            lambda i: f"CHOOSE(PROJECT_MODE+1,1-HOME_RENT_SH,OWNUSE_PCT,OWNUSE_PCT,OWNUSE_PCT*(1-{U5('U_SOLDF', i)}))",
-            fmt="pct", unit="%", tot=None, n=5)
-    ar.line("U_RENTF", "Share let (IAS 40)", lambda i: f"1-{U5('U_SOLDF', i)}-{U5('U_OWNF', i)}", fmt="pct", unit="%", tot=None, n=5)
-    ar.line("U_SALE", "Saleable area", lambda i: f"{U5('U_NET', i)}*{U5('U_SOLDF', i)}", unit="m²", n=5)
-    ar.line("U_LET", "Lettable area", lambda i: f"{U5('U_NET', i)}*{U5('U_RENTF', i)}", unit="m²", n=5)
-    ar.line("U_OWN", "Owner-occupied area", lambda i: f"{U5('U_NET', i)}*{U5('U_OWNF', i)}", unit="m²", n=5)
-    ar.line("U_PRICE", "Sale price (today)", lambda i: f"PRICE_{code(i)}", unit="ETB/m²", tot=None, n=5)
-    ar.line("U_RENT", "Rent (today)", lambda i: f"RENT_{code(i)}", unit="ETB/m²/mo", tot=None, n=5)
-    ar.line("U_SALEVAL", "Sales value (today's prices)", lambda i: f"{U5('U_SALE', i)}*{U5('U_PRICE', i)}", unit="ETB", n=5)
-    ar.line("U_RENTVAL", "Potential rent p.a. (today's prices)", lambda i: f"{U5('U_LET', i)}*{U5('U_RENT', i)}*12", unit="ETB",
-            n=5)
-    ar.gap()
-    ar.sec("Area totals and allocation shares", "ጠቅላላ ስፋትና የወጪ ድልድል")
-    ar.scalar("NET", "Net area (all uses)", f"$D${ar.rows['U_NET']}", unit="m²", name="NET_AREA")
-    ar.scalar("HRS", "Mode 0: share of house rented out", "IF(AND(RENT_HOME_F=1,NET_AREA>0),MIN(1,RENT_HOME_AREA/NET_AREA),0)",
-              fmt="pct", unit="%", name="HOME_RENT_SH")
-    ar.scalar("SALE", "Saleable area", f"$D${ar.rows['U_SALE']}", unit="m²", name="SALE_AREA", style="key")
-    ar.scalar("LET", "Lettable area", f"$D${ar.rows['U_LET']}", unit="m²", name="LET_AREA", style="key")
-    ar.scalar("OWN", "Owner-occupied area", f"$D${ar.rows['U_OWN']}", unit="m²", name="OWN_AREA")
+    ar.sec("Space schedule summary (from sheet 13) – IAS 2 sold · IAS 40 let · IAS 16 owner-held", "የቦታ ማጠቃለያ")
+    ar.scalar("NET", "Net area (all spaces)", "NET_AREA", unit="m²")
+    ar.scalar("NTG", "Net-to-gross ratio", "IF(GFA>0,NET_AREA/GFA,0)", fmt="pct", unit="%", name="NTG")
+    ar.scalar("SALE", "Saleable area", "SALE_AREA", unit="m²", style="key")
+    ar.scalar("LET", "Lettable area (incl. hotel)", "LET_AREA", unit="m²", style="key")
+    ar.scalar("OWN", "Owner-held area (owner-occupied, rent-free)", "OWN_AREA", unit="m²")
+    ar.scalar("HOT", "  of which hotel (operator lease)", "HOTEL_AREA", unit="m²")
     ar.scalar("INV_SH", "Cost share → inventory (IAS 2)", "IF(NET_AREA>0,SALE_AREA/NET_AREA,0)", fmt="pct", unit="%", name="INV_SH")
     ar.scalar("IP_SH", "Cost share → investment property (IAS 40)", "IF(NET_AREA>0,LET_AREA/NET_AREA,0)", fmt="pct", unit="%",
               name="IP_SH")
-    ar.scalar("PPE_SH", "Cost share → owner-occupied PPE (IAS 16)", "IF(NET_AREA>0,OWN_AREA/NET_AREA,1)", fmt="pct", unit="%",
+    ar.scalar("PPE_SH", "Cost share → owner-held PPE (IAS 16)", "IF(NET_AREA>0,OWN_AREA/NET_AREA,1)", fmt="pct", unit="%",
               name="PPE_SH")
     ar.scalar("RET_SH", "Cost share retained (IAS 40 + IAS 16)", "IP_SH+PPE_SH", fmt="pct", unit="%", name="RET_SH")
-    ar.scalar("SALEVAL", "Sales value at today's prices", f"$D${ar.rows['U_SALEVAL']}", unit="ETB", name="SALEVAL_TODAY")
+    ar.scalar("SALEVAL", "Sales value at today's prices", "SALEVAL_TODAY", unit="ETB")
     ar.scalar("BPRICE", "Blended sale price (today, after scenario & flex)", "IF(SALE_AREA>0,SALEVAL_TODAY/SALE_AREA,0)*D_PRICE_F",
               unit="ETB/m²", name="BLEND_PRICE")
-    ar.scalar("GPR0", "Potential rent p.a. (today's prices, before scenario)",
-              f"IF(PROJECT_MODE=0,IF(RENT_HOME_F=1,RENT_HOME_MONTHLY*12,0),$D${ar.rows['U_RENTVAL']})", unit="ETB", name="GPR_TODAY")
-    ar.scalar("ACHK", "Area reconciliation difference (uses vs floors)", f"$D${ar.rows['U_GROSS']}-GFA", unit="m²", name="AREA_DIFF")
+    ar.scalar("GPR0", "Potential rent p.a. – spaces (today's prices, 100% let)", "GPR_TODAY", unit="ETB")
+    ar.scalar("OCCW", "Stabilised occupancy – rent-weighted", "IF(GPR_TODAY>0,GPR_STAB/GPR_TODAY,0)", fmt="pct", unit="%",
+              name="OCC_STAB")
+    ar.scalar("HRT", "Hotel rent at stabilisation (today's prices)",
+              "IF(HOTEL_AREA>0,MAX(HOT_MIN,HOT_TURN*HOT_KEYS*HOT_ADR*365*HOT_OCC3*(1+HOT_FB)),0)", unit="ETB", name="HOTEL_RENT_TODAY")
+    ar.scalar("RVAT", "Share of rent subject to VAT (residential exempt if set)",
+              "IF(GPR_STAB+HOTEL_RENT_TODAY>0,1-RES_VAT_EXEMPT*RES_RENT_STAB/(GPR_STAB+HOTEL_RENT_TODAY),1)", fmt="pct", unit="%",
+              name="RENT_VAT_PCT")
+    ar.scalar("ACHK", "Net area above gross area (should be 0)", "MAX(0,NET_AREA-GFA)", unit="m²", name="AREA_DIFF")
     ar.scalar("SCHK", "Share reconciliation (should be 100%)", "INV_SH+IP_SH+PPE_SH", fmt="pct", unit="%", name="SHARE_SUM")
+    ar.scalar("HCHK", "Hotel inputs consistent (space ⇔ keys & rate)",
+              "IF(HOTEL_AREA>0,IF(AND(HOT_KEYS>0,HOT_ADR>0),0,1),IF(HOT_KEYS>0,1,0))", fmt="int", unit="flag", name="HOTEL_INCONS")
 
     # =================================================================== 22 CAPEX (budget)
     cx = Sheet(b, "22_Capex", "22 · Capex – elemental BOQ, soft costs, land", "የካፒታል ወጪ – የግንባታ ዝርዝር", TAB_ENGINE,
@@ -208,10 +188,11 @@ def build_engine(b):
     cx.scalar("CONT", "Contingency", lambda: XT(C23, "CONT"), name="CONT_TOT")
     cx.scalar("DES", "Design fees", lambda: XT(C23, "DESIGN"), name="DESIGN_TOT")
     cx.scalar("SUP", "Supervision", lambda: XT(C23, "SUPERV"), name="SUPERV_TOT")
+    cx.scalar("CONS", "Specialist consultancy", lambda: XT(C23, "CONSULT"), name="CONSULT_TOT")
     cx.scalar("PER", "Permits & fees", lambda: XT(C23, "PERMIT"), name="PERMIT_TOT")
     cx.scalar("FFE", "FF&E / furniture", lambda: XT(C23, "FFE"), name="FFE_TOT")
     cx.scalar("CC", "CONSTRUCTION COST (excl. land & finance)",
-              "HARD_ESC_TOT+CONT_TOT+DESIGN_TOT+SUPERV_TOT+PERMIT_TOT+FFE_TOT", name="CONSTR_COST", style="key")
+              "HARD_ESC_TOT+CONT_TOT+DESIGN_TOT+SUPERV_TOT+CONSULT_TOT+PERMIT_TOT+FFE_TOT", name="CONSTR_COST", style="key")
     cx.scalar("LAND", "Land", lambda: XT(C23, "LANDACC"), name="LAND_TOT")
     cx.scalar("ARR", "Arrangement fee (IAS 23)", lambda: XT(C23, "ARRF"), name="ARR_TOT")
     cx.scalar("COM", "Commitment fees (IAS 23)", lambda: XT(C23, "COMF"), name="COMMIT_TOT")
@@ -250,7 +231,7 @@ def build_engine(b):
             ("CAT4", "MEP & specialist systems", "EL_MEP+EL_SPEC"),
             ("CAT5", "Preliminaries & external works", "EL_PRELIM+EL_EXTW+X_COMPOUND+X_SEPTIC+X_WTANK+X_PAVE"),
             ("CAT6", "Escalation & contingency", "ESC_AMT+CONT_TOT"),
-            ("CAT7", "Fees & permits", "DESIGN_TOT+SUPERV_TOT+PERMIT_TOT"),
+            ("CAT7", "Fees, consultancy & permits", "DESIGN_TOT+SUPERV_TOT+CONSULT_TOT+PERMIT_TOT"),
             ("CAT8", "Furniture & FF&E", "FFE_TOT"),
             ("CAT9", "Land", "LAND_TOT"),
             ("CAT10", "Finance costs (fees + IDC)", "FIN_CAP")]
@@ -297,6 +278,7 @@ def build_engine(b):
     cm.line("CONT", "Contingency", lambda i: f"{m('HARD', i)}*CONT_PCT")
     cm.line("DESIGN", "Design fees", lambda i: f"DESIGN_PCT*HARD_BASE*(IF({TT('M_T', i)}=1,DESIGN_UPFRONT,0)+(1-DESIGN_UPFRONT)*{m('S', i)})")
     cm.line("SUPERV", "Supervision", lambda i: f"SUPERV_PCT*{m('HARD', i)}")
+    cm.line("CONSULT", "Specialist consultancy", lambda i: f"CONSULT_PCT*{m('HARD', i)}")
     cm.line("PERMIT", "Permits & fees", lambda i: "PERMITS" if i == 1 else 0)
     cm.line("FFE", "FF&E / furniture", lambda i: f"IF({TT('M_T', i)}=CONSTR_EFF,FFE,0)")
     cm.line("LANDACC", "Land (recognised month 1)", lambda i: "LAND_VALUE" if i == 1 else 0)
@@ -304,7 +286,7 @@ def build_engine(b):
     cm.line("COMF", "Commitment fee on undrawn facility",
             lambda i: f"IF({TT('M_T', i)}<=CONSTR_EFF,MAX(0,DEBT_CAP-{prev('CUMDEBT', i)})*COMMIT_FEE/12,0)")
     cm.line("IDC", "Interest during construction (from loan schedule)", lambda i: X("27_Loan", "CAPC", i))
-    cm.line("ACC", "Total capex accrual", lambda i: "+".join(m(k, i) for k in ("HARD", "CONT", "DESIGN", "SUPERV", "PERMIT", "FFE",
+    cm.line("ACC", "Total capex accrual", lambda i: "+".join(m(k, i) for k in ("HARD", "CONT", "DESIGN", "SUPERV", "CONSULT", "PERMIT", "FFE",
                                                                                   "LANDACC", "ARRF", "COMF", "IDC")),
             style="total")
     cm.line("CUMACC", "Cumulative capex accrual", lambda i: f"{prev('CUMACC', i)}+{m('ACC', i)}", tot="last")
@@ -312,12 +294,13 @@ def build_engine(b):
     cm.line("RETW", "Retention withheld from contractor", lambda i: f"RETENTION*{m('HARD', i)}")
     cm.line("LANDC", "Land cash (lease down payment)", lambda i: "IF(LAND_TYPE=1,LAND_VALUE*LEASE_DP,0)" if i == 1 else 0)
     cm.line("DEVC", "Development cash paid (excl. finance costs)",
-            lambda i: f"{m('LANDC', i)}+{m('HARD', i)}-{m('RETW', i)}+{m('CONT', i)}+{m('DESIGN', i)}+{m('SUPERV', i)}+{m('PERMIT', i)}+{m('FFE', i)}")
-    cm.line("VATC", "Input VAT on capex (commercial modes; reclaimable)", lambda i: f"IF(PROJECT_MODE=0,0,1)*VAT_R*VAT_CAPEX_PCT*({m('HARD', i)}+{m('CONT', i)}+{m('DESIGN', i)}+{m('SUPERV', i)}+{m('FFE', i)})")
+            lambda i: f"{m('LANDC', i)}+{m('HARD', i)}-{m('RETW', i)}+{m('CONT', i)}+{m('DESIGN', i)}+{m('SUPERV', i)}+{m('CONSULT', i)}+{m('PERMIT', i)}+{m('FFE', i)}")
+    cm.line("VATC", "Input VAT on capex (reclaimable)", lambda i: f"VAT_R*VAT_CAPEX_PCT*({m('HARD', i)}+{m('CONT', i)}+{m('DESIGN', i)}+{m('SUPERV', i)}+{m('CONSULT', i)}+{m('FFE', i)})")
+    cm.line("PREOP", "Pre-opening & launch marketing (expensed, funded)", lambda i: f"IF({TT('M_T', i)}=CONSTR_EFF,PREOPEN,0)")
     cm.line("LSI", "Land lease instalment (during construction)", lambda i: f"{m('CF', i)}*{X('27_Loan', 'LS_PR', i)}")
     cm.line("LSINT", "Land lease interest (during construction)", lambda i: f"{m('CF', i)}*{X('27_Loan', 'LS_INT', i)}")
     cm.line("NEEDX", "Funding need excl. finance costs",
-            lambda i: f"{m('CF', i)}*({m('DEVC', i)}+{m('VATC', i)}+{m('LSI', i)}+{m('LSINT', i)})")
+            lambda i: f"{m('CF', i)}*({m('DEVC', i)}+{m('VATC', i)}+{m('PREOP', i)}+{m('LSI', i)}+{m('LSINT', i)})")
     cm.line("FINC", "Finance costs paid in cash (fees)", lambda i: f"{m('ARRF', i)}+{m('COMF', i)}")
     cm.line("NEED", "TOTAL FUNDING NEED", lambda i: f"{m('NEEDX', i)}+{m('FINC', i)}", style="total")
     cm.line("CUMNEED", "Cumulative funding need", lambda i: f"{prev('CUMNEED', i)}+{m('NEED', i)}", tot="max")
@@ -368,9 +351,9 @@ def build_engine(b):
               f"SUMPRODUCT(E{cm.rows['USERP']}:{pc(MON_C)}{cm.rows['USERP']},E{cm.rows['CF']}:{pc(MON_C)}{cm.rows['CF']})",
               fmt="pct", unit="%", name="USER_TOT")
     cm.scalar("FB", "Funding base (need excl. IDC & finance fees)", f"$D${cm.rows['NEEDX']}", name="FUND_BASE")
-    cm.scalar("EQC", "Equity commitment", "IF(PROJECT_MODE=0,SAVINGS+FAMILY,EQ_PCT*FUND_BASE)", name="EQ_COMMIT")
+    cm.scalar("EQC", "Equity commitment", "EQ_PCT*FUND_BASE", name="EQ_COMMIT")
     cm.scalar("DC", "Debt facility (cap)",
-              "IF(PROJECT_MODE=0,HOME_LOAN,IF(LOAN_CAP>0,MIN(LOAN_CAP,(1-EQ_PCT)*FUND_BASE),(1-EQ_PCT)*FUND_BASE))", name="DEBT_CAP")
+              "IF(LOAN_CAP>0,MIN(LOAN_CAP,(1-EQ_PCT)*FUND_BASE*(1+DEBT_HEADROOM)),(1-EQ_PCT)*FUND_BASE*(1+DEBT_HEADROOM))", name="DEBT_CAP")
     cm.scalar("EQS", "Equity share for pro-rata draws", "IF(EQ_COMMIT+DEBT_CAP>0,EQ_COMMIT/(EQ_COMMIT+DEBT_CAP),1)", fmt="pct",
               unit="%", name="EQ_SHARE")
     cm.scalar("PEAKF", "Peak cumulative funding requirement", f"$D${cm.rows['CUMNEED']}", name="PEAK_FUND", style="key")
@@ -381,6 +364,7 @@ def build_engine(b):
     cm.scalar("HANDT", "Handover collections at completion", f"$D${cm.rows['HAND']}", name="HAND_TOT")
     cm.scalar("RETT", "Total retention withheld", f"$D${cm.rows['RETW']}", name="RET_TOT")
     cm.scalar("LANDCT", "Land paid in cash in month 1", f"$D${cm.rows['LANDC']}", name="LANDCASH_TOT")
+    cm.scalar("PREOT", "Pre-opening cost funded at completion", f"$D${cm.rows['PREOP']}", name="PREOP_TOT")
     cm.scalar("SRC", "Sources − uses (should be 0)", f"$D${cm.rows['SRCCHK']}", name="SRC_DIFF")
 
     # =================================================================== 27 LOAN (monthly, 288)
@@ -451,7 +435,7 @@ def build_engine(b):
     ln.line("LY", "Loan year after completion", lambda i: TT("M_LY", i), fmt="int", unit="no.", tot=None)
     ln.line("PIDX", "Annual period index", lambda i: TT("M_PIDX", i), fmt="int", unit="no.", tot=None)
     ln.line("RATE", "Interest rate (p.a.)",
-            lambda i: f"MAX(0,(IF(AND(RATE_TYPE=2,{L('LY', i)}>0),INDEX(RATE_PATH,MIN(10,MAX(1,{L('LY', i)}))),RATE)+D_RATE_ADD)*D_RATE_F)",
+            lambda i: f"MAX(0,(IF(AND(RATE_TYPE=2,{L('LY', i)}>0),INDEX(RATE_PATH,MIN(10,MAX(1,{L('LY', i)}))),INT_RATE)+D_RATE_ADD)*D_RATE_F)",
             fmt="pct2", unit="%", tot=None)
     ln.line("GR", "Grace flag", lambda i: f"IF(AND({L('K', i)}>=1,{L('K', i)}<=GRACE_M),1,0)", fmt="int", unit="flag")
     ln.line("EV", "Repayment event flag",
@@ -558,20 +542,36 @@ def build_engine2(b):
     rv.line("CASSET", "Contract asset", lambda i: f"MAX(0,-{r('CBAL', i)})", tot="last")
     rv.line("SC_OPS", "Sales collections in operating year (for sweep)", lambda i: 0 if i <= 4 else r("SALES_COLL", i))
     b.name("SALES_COLL_OPS", f"'24_Revenue'!$I${rv.rows['SC_OPS']}:$R${rv.rows['SC_OPS']}")
-    rv.sec("Rent (IFRS 16 lessor)", "ኪራይ")
-    rv.line("GPR", "Gross potential rent",
+    rv.sec("Rent from the space schedule (IFRS 16 lessor)", "ኪራይ ከቦታ ዝርዝር")
+    rv.line("GPR", "Gross potential rent – spaces (100% let)",
             lambda i: 0 if i <= 4 else f"GPR_TODAY*D_RENT_F*(1+RESC_EFF)^(CONSTR_EFF/12+{T('T_Y', i)}-1)")
-    rv.line("OCC", "Occupancy",
-            lambda i: 0 if i <= 4 else f"MIN(1,MAX(0,(CHOOSE(MIN({T('T_Y', i)},3),OCC_O1,OCC_O2,OCC_STAB)+D_OCC_ADD)*D_OCC_F))",
+    rv.line("OCC", "Occupancy (rent-weighted; lease-up then stabilised)",
+            lambda i: 0 if i <= 4 else f"MIN(1,MAX(0,(OCC_STAB*CHOOSE(MIN({T('T_Y', i)},3),RAMP_O1,RAMP_O2,1)+D_OCC_ADD)*D_OCC_F))",
             fmt="pct", unit="%", tot=None)
-    rv.line("RENT", "Rental income", lambda i: f"{r('GPR', i)}*{r('OCC', i)}", style="total")
-    rv.line("KEYR", "Key money received", lambda i: f"IF(PROJECT_MODE=0,0,KEY_MONTHS*{r('RENT', i)}/12)" if i == 5 else 0)
+    rv.line("RENT_SP", "Rent – spaces", lambda i: f"{r('GPR', i)}*{r('OCC', i)}")
+    rv.sec("Hotel operator lease (turnover rent, minimum guaranteed)", "የሆቴል ኪራይ")
+    rv.line("H_OCC", "Hotel occupancy",
+            lambda i: 0 if i <= 4 else f"IF(HOTEL_AREA>0,MIN(1,MAX(0,(CHOOSE(MIN({T('T_Y', i)},3),HOT_OCC1,HOT_OCC2,HOT_OCC3)+D_OCC_ADD)*D_OCC_F)),0)",
+            fmt="pct", unit="%", tot=None)
+    rv.line("H_ADR", "Average daily rate (escalated)",
+            lambda i: 0 if i <= 4 else f"HOT_ADR*D_RENT_F*(1+HOT_ADR_ESC)^(CONSTR_EFF/12+{T('T_Y', i)}-1)", unit="ETB", tot=None)
+    rv.line("H_ROOMS", "Rooms revenue (operator)", lambda i: 0 if i <= 4 else f"IF(HOTEL_AREA>0,HOT_KEYS*365*{r('H_OCC', i)}*{r('H_ADR', i)},0)")
+    rv.line("H_TOT", "Total hotel revenue (operator)", lambda i: f"{r('H_ROOMS', i)}*(1+HOT_FB)")
+    rv.line("H_TURN", "Turnover rent", lambda i: f"HOT_TURN*{r('H_TOT', i)}")
+    rv.line("H_MIN", "Minimum guaranteed rent",
+            lambda i: 0 if i <= 4 else f"IF(HOTEL_AREA>0,HOT_MIN*(1+RESC_EFF)^(CONSTR_EFF/12+{T('T_Y', i)}-1),0)")
+    rv.line("HOTEL", "Hotel rent to owner (higher of the two)", lambda i: f"MAX({r('H_TURN', i)},{r('H_MIN', i)})")
+    rv.sec("Total rent and other income", "ጠቅላላ ኪራይና ሌሎች ገቢዎች")
+    rv.line("RENT", "Rental income (spaces + hotel)", lambda i: f"{r('RENT_SP', i)}+{r('HOTEL', i)}", style="total")
+    rv.line("KEYR", "Key money received", lambda i: f"KEY_MONTHS*{r('RENT_SP', i)}/12" if i == 5 else 0)
     rv.line("KEYA", "Key money released to income",
             lambda i: 0 if i <= 4 else f"IF({T('T_Y', i)}<=MAX(1,KEY_AMORT_Y),$D${rv.rows['KEYR']}/MAX(1,KEY_AMORT_Y),0)")
     rv.line("KEYD", "Deferred key money (liability)", lambda i: f"{rp('KEYD', i)}+{r('KEYR', i)}-{r('KEYA', i)}", tot="last")
     rv.line("SCR", "Service charge recoveries", lambda i: f"SC_RECOV*{X('25_Opex', 'PROP', i)}")
-    rv.line("OTH", "Other income",
-            lambda i: 0 if i <= 4 else f"IF(PROJECT_MODE=0,0,OTHER_INC*(1+OPEX_ESC)^({T('T_Y', i)}-1))")
+    for n_ in range(1, 5):
+        rv.line(f"OI{n_}", (lambda n_: f"  Other income – stream {n_} (Inputs block 8)")(n_),
+                (lambda n_: lambda i: 0 if i <= 4 else f"OINC{n_}*(1+OI_ESC)^({T('T_Y', i)}-1)")(n_))
+    rv.line("OTH", "Other income (4 streams)", lambda i: "+".join(r(f"OI{n_}", i) for n_ in range(1, 5)))
     rv.line("TOTREV", "TOTAL REVENUE", lambda i: "+".join(r(k, i) for k in ("SALES_REV", "RENT", "KEYA", "SCR", "OTH")),
             style="grand")
     rv.line("NOI", "Net operating income of let property (NOI)",
@@ -585,16 +585,18 @@ def build_engine2(b):
     ox.sec("Operating costs (positive = cost)", "ወጪዎች")
     ox.line("ESC", "Opex escalation index (from today)", lambda i: 0 if i <= 4 else f"(1+OPEX_ESC)^(CONSTR_EFF/12+{T('T_Y', i)}-1)",
             fmt="n2", unit="x", tot=None)
-    ox.line("PROP", "Property operating costs",
-            lambda i: 0 if i <= 4 else f"IF(OPEX_METHOD=1,OPEX_PCT*{RV('RENT', i)},OPEX_M2*LET_AREA*{o('ESC', i)})*D_OPEX_F")
+    ox.line("PROP", "Property operating costs (hotel operator bears its own costs)",
+            lambda i: 0 if i <= 4 else f"IF(OPEX_METHOD=1,OPEX_PCT*{RV('RENT_SP', i)},OPEX_M2*(LET_AREA-HOTEL_AREA)*{o('ESC', i)})*D_OPEX_F")
     ox.line("MGMT", "Management fee", lambda i: f"MGMT_PCT*{RV('RENT', i)}")
     ox.line("INS", "Insurance", lambda i: 0 if i <= 4 else f"INS_PCT*HARD_ESC_TOT*RET_SH*{o('ESC', i)}*D_OPEX_F")
     ox.line("PTAX", "Property tax", lambda i: 0 if i <= 4 else f"PROPTAX_PCT*(HARD_ESC_TOT+LAND_TOT)*RET_SH*{o('ESC', i)}")
     ox.line("MAINT", "Maintenance reserve", lambda i: 0 if i <= 4 else f"MAINT_PCT*HARD_ESC_TOT*RET_SH*{o('ESC', i)}*D_OPEX_F")
     ox.line("MKT", "Marketing", lambda i: RV("MKT", i))
-    ox.line("OVH", "Owner overheads", lambda i: 0 if i <= 4 else f"IF(PROJECT_MODE=0,0,OVERHEAD*{o('ESC', i)}*D_OPEX_F)")
+    ox.line("OVH", "Owner overheads", lambda i: 0 if i <= 4 else f"OVERHEAD*{o('ESC', i)}*D_OPEX_F")
+    ox.line("PREOP", "Pre-opening & launch marketing (expensed at completion)",
+            lambda i: f"SUMIFS('23_Construction'!$E${b.sheets['23_Construction'].rows['PREOP']}:${pc(MON_C)}${b.sheets['23_Construction'].rows['PREOP']},'23_Construction'!$E${b.sheets['23_Construction'].rows['PIDX']}:${pc(MON_C)}${b.sheets['23_Construction'].rows['PIDX']},{T('T_P', i)})")
     ox.line("BAD", "Bad debts", lambda i: f"BAD_DEBT*{RV('RENT', i)}")
-    ox.line("TOT", "TOTAL OPERATING COSTS", lambda i: "+".join(o(k, i) for k in ("PROP", "MGMT", "INS", "PTAX", "MAINT", "MKT", "OVH", "BAD")),
+    ox.line("TOT", "TOTAL OPERATING COSTS", lambda i: "+".join(o(k, i) for k in ("PROP", "MGMT", "INS", "PTAX", "MAINT", "MKT", "OVH", "PREOP", "BAD")),
             style="total")
     ox.line("VATB", "Opex base carrying input VAT", lambda i: f"OPEX_VAT_PCT*({o('PROP', i)}+{o('MGMT', i)}+{o('MAINT', i)}+{o('MKT', i)})")
 
@@ -696,7 +698,7 @@ def build_engine2(b):
     tx.line("UK", "Undistributed share k = (1 − reserve %)(1 − payout)", lambda i: "(1-LR_PCT)*(1-DIV_PAYOUT)", fmt="pct",
             unit="%", tot=None)
     tx.line("UPT", "UPT = r·k·PAT / (1 + r·k)",
-            lambda i: f"IF(AND(PROJECT_MODE<>0,{t('PATPRE', i)}>0),UPT_R*{t('UK', i)}*{t('PATPRE', i)}/(1+UPT_R*{t('UK', i)}),0)")
+            lambda i: f"IF({t('PATPRE', i)}>0,UPT_R*{t('UK', i)}*{t('PATPRE', i)}/(1+UPT_R*{t('UK', i)}),0)")
     tx.sec("Tax payable and cash", "የሚከፈል ግብር")
     tx.line("CHG", "Current tax charge (CIT + UPT)", lambda i: f"{t('CIT', i)}+{t('UPT', i)}")
     tx.line("PAID", "Tax paid (following period)", lambda i: tp("CHG", i))

@@ -1,17 +1,16 @@
 """Full production pipeline for one deliverable workbook.
 
-1. build the workbook with openpyxl (formulas, Data Tables, charts, styles)
-2. brute-force every Data Table cell (one LibreOffice recalculation per input value)   [skipped with --fast]
-3. paste those values into a copy, recalculate the whole model with LibreOffice
-4. inject all computed values as cached results into the built file (keeps formulas/Data Tables/charts)
-5. scan the result for errors and print the check summary
+1. build the workbook with openpyxl (formulas, charts, styles, static links)
+2. recalculate a copy with LibreOffice
+3. inject every computed value as the cached result into the built file (formulas and charts are kept), so the file
+   shows numbers immediately in Excel, LibreOffice, Google Sheets and file previews
+4. scan the result for errors and print the check summary
 
-usage: python finalize.py --out ../output/X.xlsx [--blank] [--fast] [--mode N --data N]
+usage: python finalize.py --out ../output/X.xlsx [--blank] [--track N --pdata N --mode N --data N --scen N]
 """
 import argparse
 import json
 import os
-import shutil
 import sys
 import tempfile
 
@@ -21,41 +20,28 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "qa"))
 import main as builder  # noqa: E402
-import datatables  # noqa: E402
 import postprocess  # noqa: E402
 from harness import make_variant, calc, values  # noqa: E402
 
 ERRS = ("#VALUE!", "#DIV/0!", "#REF!", "#NAME?", "#NULL!", "#NUM!", "#N/A")
 
 
-def run(out, blank=False, fast=False, mode=None, data=None, scen=None, inputs=None, workers=4, work=None):
+def run(out, blank=False, track=None, pdata=None, mode=None, data=None, scen=None, inputs=None, work=None):
     work = work or tempfile.mkdtemp(prefix="rapha_fin_")
     os.makedirs(work, exist_ok=True)
     built = os.path.join(work, "built.xlsx")
     b = builder.build(blank)
     b.wb.save(built)
     src = built
-    if mode is not None or data is not None or scen is not None or inputs:
-        # settings variant: keep charts by editing the built file through openpyxl is lossy -> rebuild via XML edit
+    if any(v is not None for v in (track, pdata, mode, data, scen)) or inputs:
         src = os.path.join(work, "built_settings.xlsx")
-        set_start(built, src, mode, data, scen, inputs)
-    dt_vals = {}
-    if not fast:
-        key = model_hash(src)
-        cache = os.path.join(HERE, ".dtcache", key + ".json")
-        if os.path.exists(cache):
-            dt_vals = {tuple(k.split("|")): v for k, v in json.load(open(cache)).items()}
-            print(f"data tables: cache hit {key[:10]}", flush=True)
-        else:
-            tables, dt_vals = datatables.compute(src, os.path.join(work, "dt"), workers=workers)
-            os.makedirs(os.path.dirname(cache), exist_ok=True)
-            json.dump({f"{a}|{b_}": v for (a, b_), v in dt_vals.items()}, open(cache, "w"))
-    pasted = os.path.join(work, "pasted.xlsx")
-    make_variant(src, pasted, paste=dt_vals, strip_dt=True)
-    r = calc(pasted, 900)
+        set_start(built, src, track, pdata, mode, data, scen, inputs)
+    calc_copy = os.path.join(work, "calc.xlsx")
+    make_variant(src, calc_copy)
+    r = calc(calc_copy, 900)
     if "error" in r:
         raise RuntimeError(r["error"])
-    wbv = values(pasted)
+    wbv = values(calc_copy)
     vals = {}
     for ws in wbv.worksheets:
         d = {}
@@ -64,19 +50,16 @@ def run(out, blank=False, fast=False, mode=None, data=None, scen=None, inputs=No
                 if c.value is not None:
                     d[c.coordinate] = c.value
         vals[ws.title] = d
-    for (sh, co), v in dt_vals.items():
-        vals.setdefault(sh, {})[co] = v
-    stats = postprocess.inject(src, out, vals, b.DT_RANGES)
-    # report
+    stats = postprocess.inject(src, out, vals, [])
     errs = []
     for sh, d in vals.items():
         for co, v in d.items():
             if isinstance(v, str) and v in ERRS:
                 errs.append(f"{sh}!{co}={v}")
-    chk = {k: nm(wbv, k) for k in ("CHK_PASS", "CHK_FAIL", "CHK_WARN", "CHK_TOTAL", "VERDICT", "EIRR", "TDC")}
+    chk = {k: nm(wbv, k) for k in ("TRACK", "CHK_PASS", "CHK_FAIL", "CHK_WARN", "CHK_TOTAL", "VERDICT", "EIRR", "TDC",
+                                   "PCHK_PASS", "PCHK_FAIL", "PCHK_WARN", "P_TOTAL")}
     rep = {"out": out, "recalc_total_formulas": r.get("total_formulas"), "recalc_errors": r.get("total_errors"),
-           "value_errors": len(errs), "error_cells": errs[:20], "injected": stats, "checks": chk,
-           "datatable_cells": len(dt_vals)}
+           "value_errors": len(errs), "error_cells": errs[:20], "injected": stats, "checks": chk}
     print(json.dumps(rep, indent=1, default=str))
     return rep
 
@@ -130,28 +113,25 @@ def nm(wb, n):
     return wb[sh][ref.replace("$", "").split(":")[0]].value
 
 
-def set_start(src, dst, mode=None, data=None, scen=None, inputs=None):
+def set_start(src, dst, track=None, pdata=None, mode=None, data=None, scen=None, inputs=None):
     """Change Start selections / inputs by editing the sheet XML directly (keeps charts)."""
     import re
     import zipfile
-    from harness import MODE, DATA, SCEN
+    from harness import MODE, DATA, SCEN, PDATA, TRACK
     from xml.sax.saxutils import escape
     z = zipfile.ZipFile(src)
     files = postprocess._sheet_files(z)
     edits = {}
-    if mode is not None:
-        edits.setdefault("00_Start", {})["D10"] = MODE[mode]
-    if data is not None:
-        edits.setdefault("00_Start", {})["D12"] = DATA[data]
-    if scen is not None:
-        edits.setdefault("00_Start", {})["D14"] = SCEN[scen]
+    for v, cell, mp in ((track, "D9", TRACK), (pdata, "D15", PDATA), (mode, "I15", MODE), (data, "I17", DATA), (scen, "I19", SCEN)):
+        if v is not None:
+            edits.setdefault("00_Start", {})[cell] = mp[v]
     if inputs:
         wb = load_workbook(src, read_only=False)
         for k, v in inputs.items():
             dn = wb.defined_names[k]
             sh, ref = list(dn.destinations)[0]
             row = int("".join(ch for ch in ref if ch.isdigit()))
-            col = {1: "E", 2: "F", 3: "G"}[data or 3]
+            col = {1: "E", 2: "F", 3: "G"}[data or 2]
             edits.setdefault(sh, {})[f"{col}{row}"] = v
     zout = zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED)
     inv = {v: k for k, v in files.items()}
@@ -177,12 +157,12 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
     ap.add_argument("--blank", action="store_true")
-    ap.add_argument("--fast", action="store_true")
+    ap.add_argument("--track", type=int)
+    ap.add_argument("--pdata", type=int)
     ap.add_argument("--mode", type=int)
     ap.add_argument("--data", type=int)
     ap.add_argument("--scen", type=int)
     ap.add_argument("--inputs", default=None, help="json dict of input overrides")
     ap.add_argument("--work", default=None)
-    ap.add_argument("--workers", type=int, default=4)
     a = ap.parse_args()
-    run(a.out, a.blank, a.fast, a.mode, a.data, a.scen, json.loads(a.inputs) if a.inputs else None, a.workers, a.work)
+    run(a.out, a.blank, a.track, a.pdata, a.mode, a.data, a.scen, json.loads(a.inputs) if a.inputs else None, a.work)

@@ -12,7 +12,8 @@ from core import (axis_font, Sheet, pc, CL, NF, ANN_N, MON_C, MON_L, font, fill,
                   NAVY, AMBER, BLUE, TEAL, VIOLET, ROSE, CANVAS, CARD, BORDER, INK, SEC, GOOD_FG, GOOD_BG, WARN_FG, WARN_BG,
                   CRIT_FG, CRIT_BG, FILL_KEY, FILL_NAVY, FILL_AMBER, FILL_CANVAS, FILL_CARD, AMFONT, LINK_FG, BOTTOM_AMBER,
                   INPUT_FG, INPUT_BG, PERIOD_LABELS)
-from inputs_def import INPUTS, LISTS, RATE_LIB, EL_KEYS, ELEMENTS, ELEMENTS_AM, SAMPLE_NOTE
+from inputs_def import (INPUTS, LISTS, RATE_LIB, EL_KEYS, ELEMENTS, ELEMENTS_AM, SAMPLE_NOTE, confidence, SPACE_TYPES,
+                        N_SPACES, SPACES_USER, SPACES_S1, SPACES_S2, T_HOTEL, T_RES, T_OWN, T_FREE)
 from glossary import GLOSSARY
 
 TAB_SETUP = "8A94A3"
@@ -40,6 +41,7 @@ def card(ws, r1, c1, r2, c2, bg=CARD, border=BORDER):
 # ---------------------------------------------------------------------- LISTS
 def build_lists(b):
     ws = b.wb.create_sheet("Lists")
+    b.LIST_RANGE = {}
     ws.sheet_state = "hidden"
     for j, (nm, vals) in enumerate(LISTS.items()):
         col = j + 1
@@ -47,6 +49,7 @@ def build_lists(b):
         for k, v in enumerate(vals):
             ws.cell(2 + k, col, v)
         b.name(nm, f"Lists!${CL(col)}$2:${CL(col)}${1 + len(vals)}")
+        b.LIST_RANGE[nm] = f"Lists!${CL(col)}$2:${CL(col)}${1 + len(vals)}"
         ws.column_dimensions[CL(col)].width = 30
     return ws
 
@@ -59,18 +62,20 @@ def build_inputs(b, blank=False):
     b.DV = []
     r = 6
     heads = [("B", "Input"), ("C", "ግብዓት"), ("D", "Unit"), ("E", "MY PROJECT\n(your values)"),
-             ("F", "SAMPLE A\nG+1 house" if not blank else "SAMPLE A\n(cleared)"),
-             ("G", "SAMPLE B\nB+G+8 mixed" if not blank else "SAMPLE B\n(cleared)"),
-             ("H", "ACTIVE\n(used by model)"), ("I", "Range name"), ("J", "Notes / source")]
+             ("F", "SAMPLE 1\nB+G+8 mixed" if not blank else "SAMPLE 1\n(cleared)"),
+             ("G", "SAMPLE 2\nTrade centre" if not blank else "SAMPLE 2\n(cleared)"),
+             ("H", "ACTIVE\n(used by model)"), ("I", "Range name"), ("J", "Notes / source"), ("K", "Confidence"),
+             ("L", "Source / date")]
     for col, h in heads:
         c = ws[f"{col}{r}"]
         c.value = h
         c.font = font(9, True, "FFFFFF")
         c.fill = fill(NAVY if col not in ("E",) else BLUE)
-        c.alignment = Alignment(horizontal="center" if col in "EFGH" else "left", vertical="center", wrap_text=True)
+        c.alignment = Alignment(horizontal="center" if col in "EFGHK" else "left", vertical="center", wrap_text=True)
     ws.row_dimensions[r].height = 30
     ws["B7"] = ('Blue cells on amber are inputs. Column H picks the data set chosen on the Start sheet '
-                '(1 = My project, 2 = Sample A, 3 = Sample B). Sample columns are examples – "Sample value — not market advice".')
+                '(1 = My project, 2 = Sample 1, 3 = Sample 2). Sample columns are examples – "Sample value — not market advice". '
+                'Columns K–L record how sure you are of each number and where it came from.')
     ws["B7"].font = F_NOTE
     r = 9
     for item in INPUTS:
@@ -78,7 +83,7 @@ def build_inputs(b, blank=False):
             c = ws.cell(r, 2, item[1])
             c.font = font(11, True, NAVY)
             ws.cell(r, 3, item[2]).font = font(10, False, SEC, name=AMFONT)
-            for col in range(2, 11):
+            for col in range(2, 13):
                 ws.cell(r, col).border = BOTTOM_AMBER
             ws.row_dimensions[r].height = 20
             r += 1
@@ -96,7 +101,7 @@ def build_inputs(b, blank=False):
             c.border = BOX
             c.number_format = NF.get(fmt, fmt)
             c.alignment = Alignment(horizontal="right" if fmt not in ("gen", "txt") else "left")
-            if col in (6, 7) and not blank and v not in (None, "", 0) and key not in ("PROJ_NAME", "LOCATION"):
+            if col in (6, 7) and not blank and v not in (None, "", 0) and fmt != "txt":
                 c.comment = Comment(SAMPLE_NOTE, "Rapha")
         ch = f"CHOOSE(DATA_SET,E{r},F{r},G{r})"
         if isinstance(dv, str) and dv.startswith("L_"):
@@ -105,6 +110,9 @@ def build_inputs(b, blank=False):
         elif dv == "yn":
             f = f'IF({ch}="Yes",1,0)'
             hf = "int"
+        elif dv == "txt":
+            f = f'{ch}&""'
+            hf = "gen"
         else:
             f = ch
             hf = fmt
@@ -115,19 +123,35 @@ def build_inputs(b, blank=False):
         c.border = BOX
         ws.cell(r, 9, key).font = font(8, False, SEC)
         ws.cell(r, 10, note).font = F_NOTE
+        cf_ = ws.cell(r, 11, confidence(key))
+        cf_.font = font(9, False, INPUT_FG)
+        cf_.fill = FILL_INPUT
+        cf_.border = BOX
+        cf_.alignment = Alignment(horizontal="center")
+        sc_ = ws.cell(r, 12, "")
+        sc_.font = font(9, False, INPUT_FG)
+        sc_.fill = FILL_INPUT
+        sc_.border = BOX
         b.name(key, f"'10_Inputs'!$H${r}")
         b.INPUT_ROWS[key] = r
         # validation
         rng = f"E{r}:G{r}"
         if isinstance(dv, str) and dv.startswith("L_"):
-            b.DV.append(("list", dv, rng))
+            b.DV.append(("10_Inputs", "list", dv, rng))
         elif dv == "yn":
-            b.DV.append(("list", "L_YN", rng))
-        elif dv == "use":
-            b.DV.append(("list", "L_USE", rng))
+            b.DV.append(("10_Inputs", "list", "L_YN", rng))
         elif isinstance(dv, tuple):
-            b.DV.append((dv[0], dv, rng))
+            b.DV.append(("10_Inputs", dv[0], dv, rng))
         r += 1
+    b.CONF_RNG = f"'10_Inputs'!$K$9:$K${r - 1}"
+    b.DV.append(("10_Inputs", "list", "L_CONF", f"K9:K{r - 1}"))
+    b.name("N_LOWCONF", f"'10_Inputs'!$K${r + 1}")
+    ws.cell(r + 1, 10, "Inputs marked Low confidence").font = F_BOLD
+    c_ = ws.cell(r + 1, 11, f'=COUNTIF(K9:K{r - 1},"Low")')
+    c_.font = F_BOLD
+    c_.fill = FILL_KEY
+    c_.alignment = Alignment(horizontal="center")
+    r += 2
     # rate path range
     b.name("RATE_PATH", f"'10_Inputs'!$H${b.INPUT_ROWS['RATE_O1']}:$H${b.INPUT_ROWS['RATE_O10']}")
     # cost library
@@ -159,7 +183,7 @@ def build_inputs(b, blank=False):
             cc.number_format = NF["n0"]
             if not blank:
                 cc.comment = Comment(SAMPLE_NOTE, "Rapha")
-            b.DV.append(("dec", ("dec", 0, 1e7), f"{CL(5 + jj)}{r}"))
+            b.DV.append(("10_Inputs", "dec", ("dec", 0, 1e7), f"{CL(5 + jj)}{r}"))
         ws.cell(r, 8, f"=INDEX(E{r}:G{r},FIN_IX)").number_format = NF["n0"]
         ws.cell(r, 9, "RATE_LIB").font = font(8, False, SEC)
         r += 1
@@ -184,9 +208,9 @@ def build_inputs(b, blank=False):
         ws.cell(r, 9, key).font = font(8, False, SEC)
         ws.cell(r, 10, note).font = F_NOTE
         b.name(key, f"'10_Inputs'!$E${r}")
-        b.DV.append(("dec", ("dec", 0.1, 5), f"E{r}"))
+        b.DV.append(("10_Inputs", "dec", ("dec", 0.1, 5), f"E{r}"))
         r += 1
-    for col, w in (("C", 30), ("D", 10), ("E", 15), ("F", 15), ("G", 15), ("H", 15), ("I", 16), ("J", 50)):
+    for col, w in (("C", 30), ("D", 10), ("E", 15), ("F", 15), ("G", 15), ("H", 15), ("I", 16), ("J", 44), ("K", 12), ("L", 24)):
         ws.column_dimensions[col].width = w
     ws.freeze_panes = "E9"
     sh.r = r + 1
@@ -194,18 +218,154 @@ def build_inputs(b, blank=False):
 
 
 def add_validations(b):
-    for typ, arg, rng in b.DV:
-        sheet = b.wb["10_Inputs"]
+    """Google-Sheets-safe validations: list sources point at sheet ranges (not names)."""
+    for sheet, typ, arg, rng in b.DV:
+        ws = b.wb[sheet]
         if typ == "list":
-            dv = DataValidation(type="list", formula1=f"={arg}", allow_blank=True)
+            dv = DataValidation(type="list", formula1=f"={b.LIST_RANGE[arg]}", allow_blank=True)
+            dv.error = "Pick a value from the list"
+            dv.showErrorMessage = True
         else:
             lo, hi = arg[1], arg[2]
             dv = DataValidation(type="decimal" if typ == "dec" else "whole", operator="between",
                                 formula1=str(lo), formula2=str(hi), allow_blank=True)
             dv.error = f"Enter a value between {lo:g} and {hi:g}"
             dv.showErrorMessage = True
-        sheet.add_data_validation(dv)
+        ws.add_data_validation(dv)
         dv.add(rng)
+
+
+# ---------------------------------------------------------------------- SPACES (rent roll)
+def build_spaces(b, blank=False):
+    sh = Sheet(b, "13_Spaces", "13 · Space schedule & rent roll", "የቦታ ዝርዝርና የኪራይ መዝገብ", TAB_IN, kind="free", n=0,
+               width_label=5)
+    ws = sh.ws
+    cols = ["#", "Space / unit name", "Type", "Net area m²", "Sold % (Mixed)", "Sale price ETB/m²", "Rent ETB/m²/month",
+            "Stabilised occupancy"]
+    fmts = [None, None, None, "n0", "pct", "n0", "n0", "pct"]
+    blocks = [("MY PROJECT – your spaces (type here)", SPACES_USER),
+              ("SAMPLE 1 – B+G+8 mixed-use", SPACES_USER if blank else SPACES_S1),
+              ("SAMPLE 2 – B+G+10 trade centre & hotel", SPACES_USER if blank else SPACES_S2)]
+    b.SP_ROWS = []
+    r = 8
+    starts = []
+    for title, data in blocks:
+        starts.append(r + 2)
+        r += 2 + N_SPACES + 1
+    act0 = r + 2
+    tot = act0 + N_SPACES
+    sh.r = tot + 12
+
+    def _sp(_r):
+        ws["B6"] = ("Every lettable or saleable space, one row each. The ACTIVE block at the bottom uses the data set chosen on Start "
+                    "and the project type: Build-to-Sell sells all saleable space, Build-to-Rent keeps it, Mixed uses the Sold % column. "
+                    "Hotel, owner-occupied and rent-free space is never sold. Hotel income comes from Inputs block 7.")
+        ws["B6"].font = F_NOTE
+        for (title, data), r0 in zip(blocks, starts):
+            ws.cell(r0 - 2, 2, title).font = font(11, True, NAVY)
+            for col in range(2, 10):
+                ws.cell(r0 - 2, col).border = BOTTOM_AMBER
+            for j, h in enumerate(cols):
+                c = ws.cell(r0 - 1, 2 + j, h)
+                c.font = font(9, True, "FFFFFF")
+                c.fill = fill(BLUE if r0 == starts[0] else NAVY)
+                c.alignment = Alignment(horizontal="center", wrap_text=True, vertical="center")
+            ws.row_dimensions[r0 - 1].height = 28
+            for k in range(N_SPACES):
+                rr = r0 + k
+                ws.cell(rr, 2, k + 1).font = F_UNIT
+                for j, v in enumerate(data[k]):
+                    c = ws.cell(rr, 3 + j, v)
+                    c.font = F_INPUT
+                    c.fill = FILL_INPUT
+                    c.border = BOX
+                    if fmts[1 + j]:
+                        c.number_format = NF[fmts[1 + j]]
+                    if r0 != starts[0] and j >= 2 and v not in (0, None, ""):
+                        c.comment = Comment(SAMPLE_NOTE, "Rapha")
+            rng = lambda col: f"{col}{r0}:{col}{r0 + N_SPACES - 1}"
+            b.DV.append(("13_Spaces", "list", "L_SPACE", rng("D")))
+            b.DV.append(("13_Spaces", "dec", ("dec", 0, 1e7), rng("E")))
+            b.DV.append(("13_Spaces", "dec", ("dec", 0, 1), rng("F")))
+            b.DV.append(("13_Spaces", "dec", ("dec", 0, 1e8), rng("G")))
+            b.DV.append(("13_Spaces", "dec", ("dec", 0, 1e7), rng("H")))
+            b.DV.append(("13_Spaces", "dec", ("dec", 0, 1), rng("I")))
+        # active block
+        ws.cell(act0 - 2, 2, "ACTIVE – used by the model (do not type here)").font = font(11, True, NAVY)
+        ws.cell(act0 - 2, 11, "ያገለገለ – ሞዴሉ የሚጠቀመው").font = font(10, False, SEC, name=AMFONT)
+        for col in range(2, 21):
+            ws.cell(act0 - 2, col).border = BOTTOM_AMBER
+        heads = cols + ["Type code", "Share sold", "Share owner-held", "Share let", "Sold m²", "Let m²", "Owner-held m²",
+                        "Sales value (today)", "Potential rent p.a.", "Rent at stabilised occupancy"]
+        for j, h in enumerate(heads):
+            c = ws.cell(act0 - 1, 2 + j, h)
+            c.font = font(9, True, "FFFFFF")
+            c.fill = fill(NAVY)
+            c.alignment = Alignment(horizontal="center", wrap_text=True, vertical="center")
+        ws.row_dimensions[act0 - 1].height = 40
+        for k in range(N_SPACES):
+            rr = act0 + k
+            rm, r1, r2 = (st + k for st in starts)
+            ws.cell(rr, 2, k + 1).font = F_UNIT
+            for col in "CD":
+                ws[f"{col}{rr}"] = f"=CHOOSE(DATA_SET,{col}{rm},{col}{r1},{col}{r2})&\"\""
+            for col in "EFGHI":
+                ws[f"{col}{rr}"] = f"=CHOOSE(DATA_SET,{col}{rm},{col}{r1},{col}{r2})"
+            f = {
+                "J": f"=IF(E{rr}>0,IFERROR(MATCH(D{rr},L_SPACE,0),11),0)",
+                "K": f"=IF(OR(J{rr}=0,J{rr}={T_HOTEL},J{rr}={T_OWN},J{rr}={T_FREE}),0,CHOOSE(PROJECT_MODE,1,0,MIN(1,MAX(0,F{rr}))))",
+                "L": f"=IF(OR(J{rr}={T_OWN},J{rr}={T_FREE}),1,0)",
+                "M": f"=IF(J{rr}=0,0,1-K{rr}-L{rr})",
+                "N": f"=E{rr}*K{rr}", "O": f"=E{rr}*M{rr}", "P": f"=E{rr}*L{rr}",
+                "Q": f"=N{rr}*G{rr}",
+                "R": f"=IF(J{rr}={T_HOTEL},0,O{rr}*H{rr}*12)",
+                "S": f"=R{rr}*MIN(1,MAX(0,I{rr}))",
+            }
+            for col, v in f.items():
+                ws[f"{col}{rr}"] = v
+            for j, col in enumerate("CDEFGHIJKLMNOPQRS"):
+                c = ws[f"{col}{rr}"]
+                c.font = font(9)
+                c.number_format = {"E": NF["n0"], "F": NF["pct"], "G": NF["n0"], "H": NF["n0"], "I": NF["pct"],
+                                   "J": NF["int"], "K": NF["pct"], "L": NF["pct"], "M": NF["pct"]}.get(col, NF["n0"])
+        ws.cell(tot, 3, "TOTAL").font = F_BOLD
+        for col in "ENOPQRS":
+            c = ws[f"{col}{tot}"]
+            c.value = f"=SUM({col}{act0}:{col}{tot - 1})"
+            c.font = F_BOLD
+            c.fill = FILL_KEY
+            c.number_format = NF["n0"]
+            c.border = Border(top=Side(style="thin", color=INK))
+        nm = {"E": "NET_AREA", "N": "SALE_AREA", "O": "LET_AREA", "P": "OWN_AREA", "Q": "SALEVAL_TODAY", "R": "GPR_TODAY",
+              "S": "GPR_STAB"}
+        for col, n_ in nm.items():
+            b.name(n_, f"'13_Spaces'!${col}${tot}")
+        rngJ = f"$J${act0}:$J${tot - 1}"
+        extra = [("Hotel space (net m²)", f"=SUMIF({rngJ},{T_HOTEL},$E${act0}:$E${tot - 1})", "HOTEL_AREA"),
+                 ("Residential rent at stabilised occupancy", f"=SUMIF({rngJ},{T_RES},$S${act0}:$S${tot - 1})", "RES_RENT_STAB"),
+                 ("Spaces entered", f'=COUNTIF({rngJ},">0")', "N_SPACES_USED")]
+        for k, (lab, f, n_) in enumerate(extra):
+            rr = tot + 2 + k
+            ws.cell(rr, 3, lab).font = F_BODY
+            c = ws.cell(rr, 5, f)
+            c.number_format = NF["n0"]
+            c.font = F_BOLD
+            b.name(n_, f"'13_Spaces'!$E${rr}")
+        ws.cell(tot + 6, 3, "Mix by type (net m²) – chart source").font = font(9, True, NAVY)
+        b.SP_MIX = (tot + 7, len(SPACE_TYPES))
+        for k, t in enumerate(SPACE_TYPES):
+            rr = tot + 7 + k
+            ws.cell(rr, 3, t).font = font(9)
+            c = ws.cell(rr, 5, f"=SUMIF({rngJ},{k + 1},$E${act0}:$E${tot - 1})")
+            c.number_format = NF["n0"]
+            c.font = font(9)
+        for col, w in (("B", 5), ("C", 30), ("D", 24), ("E", 11), ("F", 10), ("G", 13), ("H", 12), ("I", 12), ("J", 8),
+                       ("K", 9), ("L", 9), ("M", 9), ("N", 10), ("O", 10), ("P", 10), ("Q", 14), ("R", 14), ("S", 14)):
+            ws.column_dimensions[col].width = w
+        ws.freeze_panes = "C8"
+    sh.raw(_sp)
+    sh.r = tot + 7 + len(SPACE_TYPES) + 2
+    return sh
 
 
 # ---------------------------------------------------------------------- SCENARIOS
@@ -261,13 +421,13 @@ def build_scenarios(b):
             ws.cell(rr, 10, key).font = font(8, False, SEC)
             b.name(key, f"'11_Scenarios'!$I${rr}")
         ws.conditional_formatting.add(f"E{hdr + 1}:H{hdr + len(SCEN_DRIVERS)}",
-                                      FormulaRule(formula=[f"COLUMN(E{hdr + 1})-4=SCEN"], fill=fill("FFE9C7")))
+                                      FormulaRule(formula=[f"COLUMN(E{hdr + 1})-4=$D${sh.scal['SCEN']}"], fill=fill("FFE9C7")))
         for col, w in (("C", 20), ("D", 8), ("E", 11), ("F", 11), ("G", 11), ("H", 11), ("I", 12), ("J", 14)):
             ws.column_dimensions[col].width = w
     sh.raw(_t)
     sh.sec("Effective drivers used by the engine (scenario × flex cell)", "ሞዴሉ የሚጠቀማቸው ውጤታማ ነጂዎች")
     eff = [
-        ("SCEN", "Active scenario (1–4)", "IF(SCEN_OVR>0,SCEN_OVR,SCEN_SEL)", "int"),
+        ("SCEN", "Active scenario (1–4)", "SCEN_SEL", "int"),
         ("D_PRICE_F", "Sale price factor", "(1+SC_PRICE)*FLX_PRICE", "n2"),
         ("D_RENT_F", "Rent factor", "(1+SC_RENT)*FLX_RENT", "n2"),
         ("D_COST_F", "Construction cost factor", "(1+SC_COST)*FLX_COST", "n2"),
@@ -276,7 +436,7 @@ def build_scenarios(b):
         ("D_OCC_F", "Occupancy factor", "FLX_OCC", "n2"),
         ("D_RATE_ADD", "Interest rate points added", "SC_RATE", "pct2"),
         ("D_RATE_F", "Interest rate factor", "FLX_RATE", "n2"),
-        ("RATE_EFF", "Effective base interest rate", "MAX(0,(RATE+D_RATE_ADD)*D_RATE_F)", "pct2"),
+        ("RATE_EFF", "Effective base interest rate", "MAX(0,(INT_RATE+D_RATE_ADD)*D_RATE_F)", "pct2"),
         ("CONSTR_EFF", "Effective construction months (incl. delay)", "MAX(1,MIN(48,ROUND(CONSTR_M+SC_DELAY+FLX_DELAY,0)))", "int"),
         ("D_PRESALE_F", "Presale factor", "MAX(0,1+SC_PRESALE)", "n2"),
         ("EXIT_CAP_EFF", "Effective exit cap rate", "MAX(0.001,EXIT_CAP+SC_EXITCAP)", "pct2"),
@@ -284,7 +444,7 @@ def build_scenarios(b):
         ("RESC_EFF", "Effective rent escalation", "RENT_ESC+SC_RESC", "pct"),
         ("PESC_EFF", "Effective sale-price escalation", "PRICE_ESC+SC_PESC", "pct"),
         ("DEFAULT_EFF", "Effective default allowance", "MIN(1,MAX(0,DEFAULT_PCT+SC_DEFAULT))", "pct"),
-        ("DISC_EFF", "Effective project discount rate", "DISC+SC_DISC", "pct"),
+        ("DISC_EFF", "Effective project discount rate", "DISC_RATE+SC_DISC", "pct"),
         ("COE_EFF", "Effective cost of equity", "COE+SC_DISC", "pct"),
         ("ABS_F", "Absorption factor", "MAX(0,1+SC_ABS)", "n2"),
     ]
@@ -302,7 +462,7 @@ TAXLAW = [
     ("Loss offset cap", "LCF_CAP", "Model assumption – no statutory cap identified; set below 100% if a cap applies"),
     ("VAT – standard rate", "VAT_R", "Value Added Tax Proclamation No. 1341/2024 – 15% standard rate"),
     ("VAT on sale of buildings (share taxable)", "VAT_SALES_PCT", "Proc. 1341/2024 – exemptions for residential dwellings; confirm treatment of new-build sales"),
-    ("VAT on rent (share taxable)", "RENT_VAT_PCT", "Proc. 1341/2024 – residential rent exempt; commercial rent taxable"),
+    ("VAT on rent (share taxable – computed from the rent roll)", "RENT_VAT_PCT", "Proc. 1341/2024 – residential rent exempt; commercial rent taxable. Model: 1 − exempt residential rent ÷ total rent"),
     ("Undistributed profits tax", "UPT_R", "Proc. 979/2016, Art. 55 – undistributed / non-reinvested profits treated as dividend (10%)"),
     ("Dividend withholding tax", "DIV_WHT", "Proc. 979/2016, Art. 55 – 10% on dividends"),
     ("Legal reserve transfer", "LR_PCT", "Commercial Code of Ethiopia, Proc. No. 1243/2021, Art. 434 – 5% of profits"),
@@ -386,401 +546,219 @@ def build_glossary(b):
 
 
 # ---------------------------------------------------------------------- START
+COM_SHEETS = [("01_Dashboard", "Dashboard", "ዳሽቦርድ"), ("10_Inputs", "Inputs", "ግብዓቶች"), ("13_Spaces", "Space schedule & rent roll", "የቦታ ዝርዝር"),
+              ("11_Scenarios", "Scenarios", "ሁኔታዎች"), ("40_PL", "Profit & loss", "ትርፍና ኪሳራ"), ("41_BS", "Balance sheet", "ሀብትና ዕዳ"),
+              ("42_CF", "Cash flow", "የገንዘብ ፍሰት"), ("27_Loan", "Loan schedule", "የብድር ሰንጠረዥ"), ("50_Returns", "Returns", "ተመላሽ"),
+              ("52_Sensitivity", "Sensitivity & break-even", "የስጋት ትንተና"), ("60_Checks", "Checks", "ማረጋገጫዎች"),
+              ("12_TaxLaw", "Tax law register", "የግብር ሕግ")]
+PRI_SHEETS = [("P3_Estimate", "My house – estimate (one page)", "የቤት ግምት"), ("P1_Inputs", "My house – inputs", "ግብዓቶች"),
+              ("P2_Calc", "Calculations & loan schedule", "ስሌትና የብድር ሰንጠረዥ"), ("P4_Checks", "Checks", "ማረጋገጫዎች"),
+              ("61_Glossary", "Glossary", "መዝገበ ቃላት")]
+ALL_SHEETS = ["P1_Inputs", "P2_Calc", "P3_Estimate", "P4_Checks", "01_Dashboard", "10_Inputs", "11_Scenarios", "12_TaxLaw",
+              "13_Spaces", "20_Timeline", "21_Area", "22_Capex", "23_Construction", "24_Revenue", "25_Opex", "26_Assets", "27_Loan",
+              "28_Tax", "29_VAT", "30_WorkingCap", "40_PL", "41_BS", "42_CF", "43_Ratios", "50_Returns", "51_Payback",
+              "52_Sensitivity", "60_Checks", "61_Glossary"]
+
+
 def build_start(b, blank=False):
+    from core import link
     sh = Sheet(b, "00_Start", "Rapha Development Profitability Model", "የራፋ የግንባታ ፕሮጀክት ትርፋማነት ሞዴል", TAB_SETUP, kind="free",
-               n=0, width_label=4)
+               n=0, width_label=3)
     ws = sh.ws
 
+    def dd(r, c1, c2, lst, default):
+        ws.merge_cells(start_row=r, start_column=c1, end_row=r, end_column=c2)
+        c = ws.cell(r, c1, default)
+        c.font = font(11, True, INPUT_FG)
+        for cc in range(c1, c2 + 1):
+            ws.cell(r, cc).fill = FILL_INPUT
+            ws.cell(r, cc).border = BOX
+        dv = DataValidation(type="list", formula1=f"={b.LIST_RANGE[lst]}", allow_blank=False)
+        dv.error = "Pick a value from the list"
+        dv.showErrorMessage = True
+        ws.add_data_validation(dv)
+        dv.add(ws.cell(r, c1).coordinate)
+        return ws.cell(r, c1).coordinate
+
+    def status(r, c, lab, f, fmt=None, cv=None):
+        ws.cell(r, c, lab).font = F_BODY
+        x = ws.cell(r, cv or c + 1, f)
+        x.font = font(11, True, NAVY)
+        x.alignment = Alignment(horizontal="right")
+        if fmt:
+            x.number_format = NF.get(fmt, fmt)
+        return x
+
     def _s(_r):
-        for col, w in (("A", 2), ("B", 4), ("C", 34), ("D", 30), ("E", 4), ("F", 30), ("G", 22), ("H", 4), ("I", 30), ("J", 20), ("K", 3)):
+        for col, w in (("A", 2), ("B", 3), ("C", 30), ("D", 17), ("E", 17), ("F", 3), ("G", 3), ("H", 30), ("I", 17),
+                       ("J", 17), ("K", 3), ("L", 3), ("M", 3), ("N", 3), ("O", 10), ("P", 14)):
             ws.column_dimensions[col].width = w
-        ws["C5"] = "Does my project make money?  ·  ፕሮጀክቴ ያተርፋል?"
+        ws["C5"] = "Plan it, cost it, test it  ·  ያቅዱ፣ ዋጋውን ይወቁ፣ ይፈትሹ"
         ws["C5"].font = font(13, True, NAVY)
-        ws["C6"] = ("One workbook, two uses: a quick cost estimate for your own house (Mode 0) or full profitability, "
-                    "IFRS statements and a loan schedule for a commercial project (Modes 1–3).")
+        ws["C6"] = ("Two tools in one workbook: A – a private-house cost estimate with a home-loan plan; "
+                    "B – a full profitability model for a commercial building. Pick one in step 1, then use that card only.")
         ws["C6"].font = F_NOTE
-        # ---- questions card
-        card(ws, 8, 2, 19, 7, bg=CARD)
-        ws["C8"] = "SET UP  ·  ማዘጋጀት"
+        # ---- step 1
+        card(ws, 8, 2, 10, 11, bg=CANVAS)
+        ws["C8"] = "STEP 1 · What are you planning?  ·  ምን እያቀዱ ነው?"
         ws["C8"].font = font(11, True, NAVY)
-        qs = [(10, "1. What are you building?", "ምን እየገነቡ ነው?", "L_MODE",
-               LISTS_DEFAULT["mode_blank"] if blank else LISTS_DEFAULT["mode"]),
-              (12, "2. Which data?", "የትኛውን መረጃ?", "L_DATASET",
-               LISTS_DEFAULT["data_blank"] if blank else LISTS_DEFAULT["data"]),
-              (14, "3. Scenario", "ሁኔታ", "L_SCEN", LISTS_DEFAULT["scen"]),
-              (16, "4. Show statements in", "የመግለጫ መለኪያ", "L_UNITS", "ETB '000")]
-        for r, en, am, lst, default in qs:
-            ws.cell(r, 3, en).font = F_BOLD
-            ws.cell(r + 1, 3, am).font = font(10, False, SEC, name=AMFONT)
-            ws.merge_cells(start_row=r, start_column=4, end_row=r, end_column=6)
-            c = ws.cell(r, 4, default)
-            c.font = font(11, True, INPUT_FG)
-            c.fill = FILL_INPUT
-            c.border = BOX
-            for cc in range(4, 7):
-                ws.cell(r, cc).fill = FILL_INPUT
-                ws.cell(r, cc).border = BOX
-            dv = DataValidation(type="list", formula1=f"={lst}", allow_blank=False)
-            ws.add_data_validation(dv)
-            dv.add(f"D{r}")
-        b.name("PROJECT_MODE", "'00_Start'!$G$10")
-        b.name("DATA_SET", "'00_Start'!$G$12")
-        b.name("SCEN_SEL", "'00_Start'!$G$14")
-        b.name("UNIT_SEL", "'00_Start'!$G$16")
-        for r, f in ((10, "IFERROR(MATCH(D10,L_MODE,0)-1,0)"), (12, "IFERROR(MATCH(D12,L_DATASET,0),1)"),
-                     (14, "IFERROR(MATCH(D14,L_SCEN,0),1)"), (16, "IFERROR(MATCH(D16,L_UNITS,0),2)")):
-            c = ws.cell(r, 7, "=" + f)
-            c.font = font(9, False, SEC)
-            c.alignment = Alignment(horizontal="center")
-        ws["G9"] = "code"
-        ws["G9"].font = font(8, False, SEC)
-        ws["C18"] = ('=IF(AND(DATA_SET=2,PROJECT_MODE<>0),"Tip: Sample A is a personal house – choose mode 0.",'
-                     'IF(AND(DATA_SET=3,PROJECT_MODE<>3),"Tip: Sample B is a mixed-use building – choose mode 3.",'
-                     'IF(PROJECT_MODE=0,"Home view: open the Home Estimate page.","Commercial view: open the Dashboard.")))')
-        ws["C18"].font = font(10, True, AMBER)
-        b.name("MODE_NAME", "'00_Start'!$M$10")
-        b.name("SCEN_NAME", "'00_Start'!$M$14")
-        b.name("UNIT_LBL", "'00_Start'!$M$16")
-        ws["M16"] = '=CHOOSE(UNIT_SEL,"ETB","ETB \'000","ETB m")'
-        ws["M16"].font = font(8, False, SEC)
-        ws["M10"] = '=CHOOSE(PROJECT_MODE+1,"0 Personal residence","1 Build-to-Sell","2 Build-to-Rent","3 Mixed")'
-        ws["M14"] = '=CHOOSE(SCEN,"Base","Upside","Downside","Lender")'
-        ws["M10"].font = ws["M14"].font = font(8, False, SEC)
-        ws["M9"] = "helper labels"
-        ws["M9"].font = font(8, False, SEC)
-        # ---- status card
-        card(ws, 8, 9, 19, 10, bg=CARD)
-        ws["I8"] = "STATUS  ·  ሁኔታ"
-        ws["I8"].font = font(11, True, NAVY)
-        rows = [(10, "Checks passed", '=CHK_PASS&" / "&CHK_TOTAL', None),
-                (11, "Model status", "=CHK_STATUS", None),
-                (13, "Verdict", "=VERDICT", None),
-                (14, "ውሳኔ", "=VERDICT_AM", None),
-                (16, "Total development cost (ETB)", "=TDC", "n0"),
-                (17, '=IF(PROJECT_MODE=0,"Monthly loan instalment (ETB)","Equity IRR")',
-                 "=IF(PROJECT_MODE=0,LN_INSTAL_M,EIRR)", None)]
-        for r, lab, f, fmt in rows:
-            ws.cell(r, 9, lab).font = F_BODY
-            c = ws.cell(r, 10, f)
-            c.font = font(11, True, NAVY)
-            c.alignment = Alignment(horizontal="right")
-            if fmt:
-                c.number_format = NF[fmt]
-        ws["J17"].number_format = '[<1]0.0%;#,##0'
-        ws.conditional_formatting.add("J11", FormulaRule(formula=["CHK_FAIL>0"], fill=fill(CRIT_BG), font=Font(color=CRIT_FG, bold=True)))
-        ws.conditional_formatting.add("J11", FormulaRule(formula=["CHK_FAIL=0"], fill=fill(GOOD_BG), font=Font(color=GOOD_FG, bold=True)))
-        ws.conditional_formatting.add("J13", FormulaRule(formula=['VERDICT="VIABLE"'], fill=fill(GOOD_BG), font=Font(color=GOOD_FG, bold=True)))
-        ws.conditional_formatting.add("J13", FormulaRule(formula=['VERDICT="MARGINAL"'], fill=fill(WARN_BG), font=Font(color=WARN_FG, bold=True)))
-        ws.conditional_formatting.add("J13", FormulaRule(formula=['VERDICT="NOT VIABLE"'], fill=fill(CRIT_BG), font=Font(color=CRIT_FG, bold=True)))
-        # ---- navigation (switches with mode)
-        ws["C21"] = "NAVIGATE  ·  መሄጃ"
-        ws["C21"].font = font(11, True, NAVY)
-        home_nav = [("02_Home", "Home Estimate (one page) · የቤት ወጪ ግምት"), ("10_Inputs", "Inputs – block 2 home card · ግብዓቶች"),
-                    ("22_Capex", "Cost breakdown · የወጪ ዝርዝር"), ("23_Construction", "Monthly cash needed · ወርሃዊ ወጪ"),
-                    ("27_Loan", "Home-loan schedule · የብድር ሰንጠረዥ"), ("11_Scenarios", "Scenarios · ሁኔታዎች"),
-                    ("60_Checks", "Checks · ማረጋገጫዎች"), ("61_Glossary", "Glossary · መዝገበ ቃላት")]
-        com_nav = [("01_Dashboard", "Dashboard · ዳሽቦርድ"), ("10_Inputs", "Inputs · ግብዓቶች"), ("11_Scenarios", "Scenarios · ሁኔታዎች"),
-                   ("40_PL", "Profit & loss · ትርፍና ኪሳራ"), ("41_BS", "Balance sheet · ሀብትና ዕዳ"), ("42_CF", "Cash flow · የገንዘብ ፍሰት"),
-                   ("27_Loan", "Loan schedule · የብድር ሰንጠረዥ"), ("50_Returns", "Returns · ተመላሽ"),
-                   ("52_Sensitivity", "Sensitivity & break-even · የስጋት ትንተና"), ("60_Checks", "Checks · ማረጋገጫዎች")]
-        n = max(len(home_nav), len(com_nav))
-        for k in range(n):
-            r = 22 + k
-            h = home_nav[k] if k < len(home_nav) else ("00_Start", "")
-            cm_ = com_nav[k] if k < len(com_nav) else ("00_Start", "")
-            f = (f'=HYPERLINK(IF(PROJECT_MODE=0,"#\'{h[0]}\'!A1","#\'{cm_[0]}\'!A1"),'
-                 f'IF(PROJECT_MODE=0,"{("▸ " + h[1]) if h[1] else ""}","{("▸ " + cm_[1]) if cm_[1] else ""}"))')
-            c = ws.cell(r, 3, f)
-            c.font = font(10, False, BLUE, underline="single")
-        ws["F21"] = "ALL SHEETS"
-        ws["F21"].font = font(11, True, NAVY)
-        allsheets = ["01_Dashboard", "02_Home", "10_Inputs", "11_Scenarios", "12_TaxLaw", "20_Timeline", "21_Area", "22_Capex",
-                     "23_Construction", "24_Revenue", "25_Opex", "26_Assets", "27_Loan", "28_Tax", "29_VAT", "30_WorkingCap",
-                     "40_PL", "41_BS", "42_CF", "43_Ratios", "50_Returns", "51_Payback", "52_Sensitivity", "60_Checks",
-                     "61_Glossary"]
-        for k, s in enumerate(allsheets):
-            col = 6 if k < 13 else 7
-            r = 22 + (k if k < 13 else k - 13)
-            c = ws.cell(r, col, f'=HYPERLINK("#\'{s}\'!A1","{s.replace("_", " ")}")')
-            c.font = font(9, False, BLUE, underline="single")
+        t = dd(9, 4, 10, "L_TRACK", LISTS["L_TRACK"][1])
+        ws["C9"] = "Choose ▸"
+        ws["C9"].font = F_BOLD
+        ws["C10"] = '=IF($P$9=1,"→ Use card A (left). Card B is switched off.","→ Use card B (right). Card A is switched off.")'
+        ws["C10"].font = font(10, True, AMBER)
+        # ---- helpers (column P) – every conditional format on this sheet reads only these cells
+        ws["O8"] = "helpers"
+        ws["O8"].font = font(8, False, SEC)
+        helpers = [(9, "TRACK", f"IFERROR(MATCH({t},L_TRACK,0),2)"), (10, "P_DATA", "IFERROR(MATCH(D15,L_PDATASET,0),1)"),
+                   (11, "PROJECT_MODE", "IFERROR(MATCH(I15,L_MODE,0),3)"), (12, "DATA_SET", "IFERROR(MATCH(I17,L_DATASET,0),1)"),
+                   (13, "SCEN_SEL", "IFERROR(MATCH(I19,L_SCEN,0),1)"),
+                   (14, "MODE_NAME", 'CHOOSE(PROJECT_MODE,"Sell","Hold","Mixed")'),
+                   (15, "SCEN_NAME", 'CHOOSE(SCEN,"Base","Upside","Downside","Lender")'),
+                   (16, "UNIT_LBL", '"ETB \'000"'),
+                   (17, None, "VERDICT"), (18, None, "CHK_FAIL"), (19, None, "PCHK_FAIL"), (20, None, "P_GAP"),
+                   (21, None, "AND(P_INCOME>0,P_DTI>P_AFF_MAX)")]
+        for r, nm_, f in helpers:
+            c = ws.cell(r, 16, "=" + f)
+            c.font = font(8, False, SEC)
+            ws.cell(r, 15, nm_ or "cf helper").font = font(7, False, SEC)
+            if nm_:
+                b.name(nm_, f"'00_Start'!$P${r}")
+        # ---- card A (private)
+        card(ws, 12, 2, 37, 5, bg=CARD)
+        ws["C12"] = "A · PRIVATE RESIDENCE"
+        ws["C12"].font = font(12, True, TEAL)
+        ws["C13"] = "Cost estimate, cash per month and home-loan plan  ·  የግል ቤት"
+        ws["C13"].font = F_NOTE
+        ws["C15"] = "Which data?"
+        ws["C15"].font = F_BOLD
+        ws["C16"] = "የትኛውን መረጃ?"
+        ws["C16"].font = font(10, False, SEC, name=AMFONT)
+        dd(15, 4, 5, "L_PDATASET", LISTS["L_PDATASET"][0] if blank else LISTS["L_PDATASET"][1])
+        ws["C18"] = "STATUS  ·  ሁኔታ"
+        ws["C18"].font = font(10, True, NAVY)
+        status(19, 3, "Checks passed", '=PCHK_PASS&" / "&PCHK_TOTAL', cv=5)
+        status(20, 3, "Model status", "=PCHK_STATUS", cv=5)
+        status(21, 3, "Total cost of the house (ETB)", "=P_TOTAL", "n0", cv=5)
+        status(22, 3, "Monthly instalment (ETB)", "=P_INSTAL", "n0", cv=5)
+        status(23, 3, "Affordability", '=P_AFF_TXT', cv=5)
+        status(24, 3, "Funding gap (ETB)", "=P_GAP", "n0", cv=5)
+        ws["C26"] = "GO TO  ·  ወደ"
+        ws["C26"].font = font(10, True, NAVY)
+        for k, (sname, en, am) in enumerate(PRI_SHEETS):
+            link(ws, 27 + k, 3, sname, f"▸ {en}", align="left")
+            ws.cell(27 + k, 4, am).font = font(9, False, SEC, name=AMFONT)
+        # ---- card B (commercial)
+        card(ws, 12, 7, 37, 11, bg=CARD)
+        ws["H12"] = "B · COMMERCIAL PROJECT"
+        ws["H12"].font = font(12, True, BLUE)
+        ws["H13"] = "Profitability, IFRS statements, loan and lender metrics  ·  የንግድ ፕሮጀክት"
+        ws["H13"].font = F_NOTE
+        for r, en, am, lst, dflt in ((15, "Project type", "የፕሮጀክት ዓይነት", "L_MODE", LISTS["L_MODE"][2]),
+                                     (17, "Which data?", "የትኛውን መረጃ?", "L_DATASET", LISTS["L_DATASET"][0 if blank else 1]),
+                                     (19, "Scenario", "ሁኔታ", "L_SCEN", LISTS["L_SCEN"][0])):
+            ws.cell(r, 8, en).font = F_BOLD
+            ws.cell(r + 1, 8, am).font = font(10, False, SEC, name=AMFONT)
+            dd(r, 9, 10, lst, dflt)
+        ws["H21"] = ('=IF(AND(DATA_SET=2,PROJECT_MODE<>3),"Tip: Sample 1 is built for type 3 (Mixed).",'
+                     'IF(AND(DATA_SET=3,PROJECT_MODE<>2),"Tip: Sample 2 is built for type 2 (Hold).",""))')
+        ws["H21"].font = font(9, True, AMBER)
+        ws["H22"] = "STATUS  ·  ሁኔታ"
+        ws["H22"].font = font(10, True, NAVY)
+        status(23, 8, "Checks passed", '=CHK_PASS&" / "&CHK_TOTAL', cv=10)
+        status(24, 8, "Model status", "=CHK_STATUS", cv=10)
+        status(25, 8, "Verdict  ·  ውሳኔ", '=VERDICT&"  ·  "&VERDICT_AM', cv=10)
+        status(26, 8, "Total development cost (ETB)", "=TDC", "n0", cv=10)
+        status(27, 8, "Equity IRR", "=EIRR", "pct", cv=10)
+        status(28, 8, "Minimum DSCR", "=MIN_DSCR", "x", cv=10)
+        ws["H30"] = "GO TO  ·  ወደ"
+        ws["H30"].font = font(10, True, NAVY)
+        for k, (sname, en, am) in enumerate(COM_SHEETS):
+            r, c = (31 + k, 8) if k < 6 else (31 + k - 6, 9)
+            link(ws, r, c, sname, f"▸ {en}", align="left")
+        # inactive card greyed out (rule reads the TRACK helper on this sheet)
+        grey = dict(fill=fill("ECEEF1"), font=Font(color="9AA3AF"))
+        ws.conditional_formatting.add("B12:E37", FormulaRule(formula=["$P$9<>1"], **grey))
+        ws.conditional_formatting.add("G12:K37", FormulaRule(formula=["$P$9<>2"], **grey))
+        ws.conditional_formatting.add("J24", FormulaRule(formula=["$P$18>0"], fill=fill(CRIT_BG), font=Font(color=CRIT_FG, bold=True)))
+        ws.conditional_formatting.add("J24", FormulaRule(formula=["$P$18=0"], fill=fill(GOOD_BG), font=Font(color=GOOD_FG, bold=True)))
+        ws.conditional_formatting.add("E20", FormulaRule(formula=["$P$19>0"], fill=fill(CRIT_BG), font=Font(color=CRIT_FG, bold=True)))
+        ws.conditional_formatting.add("E20", FormulaRule(formula=["$P$19=0"], fill=fill(GOOD_BG), font=Font(color=GOOD_FG, bold=True)))
+        for rule_f, bg, fg in (('$P$17="VIABLE"', GOOD_BG, GOOD_FG), ('$P$17="MARGINAL"', WARN_BG, WARN_FG),
+                               ('$P$17="NOT VIABLE"', CRIT_BG, CRIT_FG)):
+            ws.conditional_formatting.add("J25", FormulaRule(formula=[rule_f], fill=fill(bg), font=Font(color=fg, bold=True)))
+        ws.conditional_formatting.add("E24", FormulaRule(formula=["$P$20>0.5"], fill=fill(CRIT_BG), font=Font(color=CRIT_FG, bold=True)))
+        ws.conditional_formatting.add("E23", FormulaRule(formula=["$P$21"], fill=fill(CRIT_BG), font=Font(color=CRIT_FG, bold=True)))
+        # ---- all sheets index
+        r0 = 39
+        ws.cell(r0, 3, "ALL SHEETS – click to jump  ·  ሁሉም ገጾች").font = font(11, True, NAVY)
+        per = 10
+        for k, sname in enumerate(ALL_SHEETS):
+            col = (3, 4, 8)[k // per] if k // per < 3 else 9
+            r = r0 + 1 + (k % per)
+            link(ws, r, col, sname, sname.replace("_", " "), font(9, False, BLUE, underline="single"), align="left")
         # ---- how to use
-        r0 = 37
-        ws.cell(r0, 3, "HOW TO USE  ·  አጠቃቀም").font = font(11, True, NAVY)
-        steps = [("1", "Answer question 1. Personal house → 0. Selling, renting or both → 1, 2 or 3.",
-                  "ጥያቄ 1ን ይመልሱ፡ የግል ቤት → 0፤ ለሽያጭ፣ ለኪራይ ወይም ለሁለቱም → 1፣ 2 ወይም 3።"),
-                 ("2", "Choose 'My project' in question 2 and type your values in column E of sheet 10 Inputs (blue cells only).",
-                  "በጥያቄ 2 'የእኔ ፕሮጀክት'ን ይምረጡና በገጽ 10 ዓምድ E ሰማያዊ ሕዋሶች ላይ ብቻ ይጻፉ።"),
-                 ("3", "Check the status box: all checks must pass. Then read the Home Estimate (Mode 0) or the Dashboard.",
-                  "የማረጋገጫ ሳጥኑን ይመልከቱ፤ ከዚያ የቤት ግምቱን ወይም ዳሽቦርዱን ያንብቡ።"),
-                 ("4", "Stress-test: switch scenarios (question 3) and use the flex cells on sheet 52.",
-                  "ሁኔታዎችን ይቀያይሩና በገጽ 52 የማስተካከያ ሕዋሶችን ይጠቀሙ።")]
+        r1 = r0 + per + 2
+        ws.cell(r1, 3, "HOW TO USE  ·  አጠቃቀም").font = font(11, True, NAVY)
+        steps = [("1", "Step 1: choose Private residence or Commercial project. Only the matching card is active.",
+                  "ደረጃ 1፡ የግል መኖሪያ ቤት ወይም የንግድ ፕሮጀክት ይምረጡ።"),
+                 ("2", "Private: pick 'My house', type your values in column E of P1 Inputs, then open the Estimate.",
+                  "ለግል ቤት፡ 'የእኔ ቤት'ን ይምረጡ፣ በP1 ዓምድ E ላይ ይጻፉ፣ ከዚያ ግምቱን ይክፈቱ።"),
+                 ("3", "Commercial: pick the project type and 'My project', fill 10 Inputs (column E) and 13 Spaces (top block).",
+                  "ለንግድ ፕሮጀክት፡ ዓይነቱንና 'የእኔ ፕሮጀክት'ን ይምረጡ፣ ገጽ 10 እና 13ን ይሙሉ።"),
+                 ("4", "Read the status box (all checks must pass), then the Dashboard. Stress-test with scenarios and the dials on 52.",
+                  "የማረጋገጫ ሳጥኑን ይመልከቱ፣ ከዚያ ዳሽቦርዱን፤ በሁኔታዎችና በገጽ 52 ይፈትሹ።")]
         for k, (nmb, en, am) in enumerate(steps):
-            r = r0 + 1 + 2 * k
+            r = r1 + 1 + 2 * k
             ws.cell(r, 2, nmb).font = font(13, True, AMBER)
             ws.cell(r, 3, en).font = F_BODY
             ws.cell(r + 1, 3, am).font = font(10, False, SEC, name=AMFONT)
-        r1 = r0 + 10
-        ws.cell(r1, 3, "COLOUR CODE  ·  የቀለም ኮድ").font = font(11, True, NAVY)
+        r2 = r1 + 10
+        ws.cell(r2, 3, "COLOUR CODE  ·  የቀለም ኮድ").font = font(11, True, NAVY)
         leg = [("Input – type here", "ግብዓት – እዚህ ይጻፉ", F_INPUT, FILL_INPUT),
                ("Formula – do not overwrite", "ቀመር – አይጻፉበት", font(10, False, INK), fill("FFFFFF")),
                ("Link from another sheet", "ከሌላ ገጽ ማገናኛ", font(10, False, LINK_FG), fill("FFFFFF")),
                ("Key output / check", "ቁልፍ ውጤት / ማረጋገጫ", font(10, True, INK), FILL_KEY)]
         for k, (en, am, f, fl) in enumerate(leg):
-            c = ws.cell(r1 + 1 + k, 3, en)
+            c = ws.cell(r2 + 1 + k, 3, en)
             c.font = f
             c.fill = fl
             c.border = BOX
-            ws.cell(r1 + 1 + k, 4, am).font = font(10, False, SEC, name=AMFONT)
-        r2 = r1 + 6
-        ws.cell(r2, 3, "METHOD NOTES").font = font(11, True, NAVY)
+            ws.cell(r2 + 1 + k, 4, am).font = font(10, False, SEC, name=AMFONT)
+        ws.cell(r2, 8, "GOOGLE SHEETS  ·  ጉግል ሺትስ").font = font(11, True, NAVY)
+        gs = ["Upload the .xlsx to Google Drive → right-click → Open with → Google Sheets (or File → Save as Google Sheets).",
+              "Every link on this page and every '◂ Start' / 'Dashboard ▸' link in the sheet headers jumps to its sheet.",
+              "Dropdowns, checks, charts and the sensitivity sheet all recalculate live – no macros, no Data Tables.",
+              "File → Settings → Calculation: leave 'Iterative calculation' OFF (the model has no circular references)."]
+        for k, t_ in enumerate(gs):
+            ws.merge_cells(start_row=r2 + 1 + k, start_column=8, end_row=r2 + 1 + k, end_column=11)
+            c = ws.cell(r2 + 1 + k, 8, t_)
+            c.font = font(9, False, INK)
+            c.alignment = Alignment(wrap_text=True, vertical="top")
+            ws.row_dimensions[r2 + 1 + k].height = 25
+        r3 = r2 + 7
+        ws.cell(r3, 3, "METHOD NOTES").font = font(11, True, NAVY)
         notes = [
             "No circularity: interest during construction (IDC) is built month by month on the opening balance plus draws; "
             "the arrangement fee is charged on a facility base that excludes IDC; undistributed-profits tax uses a closed form.",
-            "Timeline: construction is modelled monthly (up to 48 months) and rolled up to C1–C4; operations run O1–O10 annually. "
-            "Returns use dated cash flows (XIRR).",
-            "IFRS: IAS 2 units for sale, IAS 40 let space (cost model), IAS 16 owner-occupied, IAS 23 capitalised borrowing cost, "
+            "Commercial timeline: construction monthly (up to 48 months) rolled up to C1–C4; operations O1–O10 annually; returns use "
+            "dated cash flows (XIRR). Private track: 48 construction months plus a 240-month loan schedule.",
+            "IFRS: IAS 2 units for sale, IAS 40 let space (cost model), IAS 16 owner-held, IAS 23 capitalised borrowing cost, "
             "IFRS 15 sales, IFRS 16 rent, IAS 12 tax, IAS 36 impairment test, IAS 7 indirect cash flow.",
-            "Sensitivity tables are Excel Data Tables. If Excel is set to 'Automatic except data tables', press F9.",
             "Disclaimer: a planning tool only – not investment, tax or legal advice. Confirm tax rates (sheet 12) before use.",
             "ማሳሰቢያ፡ ይህ የዕቅድ መሣሪያ ብቻ ነው፤ የኢንቨስትመንት፣ የግብር ወይም የሕግ ምክር አይደለም።",
         ]
-        for k, t in enumerate(notes):
-            c = ws.cell(r2 + 1 + k, 3, t)
-            c.font = F_NOTE if k < 5 else font(9, False, SEC, italic=True, name=AMFONT)
-        ws.print_area = "A1:K60"
+        for k, t_ in enumerate(notes):
+            ws.merge_cells(start_row=r3 + 1 + k, start_column=3, end_row=r3 + 1 + k, end_column=11)
+            c = ws.cell(r3 + 1 + k, 3, t_)
+            c.font = F_NOTE if k < 4 else font(9, False, SEC, italic=True, name=AMFONT)
+            c.alignment = Alignment(wrap_text=True, vertical="top")
+            ws.row_dimensions[r3 + 1 + k].height = 25
+        ws.print_area = f"A1:K{r3 + 7}"
         ws.page_setup.fitToHeight = 1
-    sh.raw(_s)
-    sh.r = 70
-    return sh
-
-
-LISTS_DEFAULT = {
-    "mode": LISTS["L_MODE"][3], "mode_blank": LISTS["L_MODE"][0],
-    "data": LISTS["L_DATASET"][2], "data_blank": LISTS["L_DATASET"][0],
-    "scen": LISTS["L_SCEN"][0],
-}
-
-
-# ---------------------------------------------------------------------- HOME ESTIMATE
-def build_home(b):
-    sh = Sheet(b, "02_Home", "Home Estimate", "የቤት ግንባታ ወጪ ግምት", TAB_REP, kind="free", n=0, width_label=27)
-    ws = sh.ws
-    cm = b.sheets["23_Construction"]
-    ln = b.sheets["27_Loan"]
-
-    def hdr_row(r, cols, labels):
-        for c, h in zip(cols, labels):
-            x = ws.cell(r, c, h)
-            x.font = font(9, True, "FFFFFF")
-            x.fill = fill(NAVY)
-            x.alignment = Alignment(horizontal="left" if c in (2, 7) else "right")
-
-    def title(r, c, t):
-        x = ws.cell(r, c, t)
-        x.font = font(11, True, NAVY)
-
-    def _h(_r):
-        for col, w in (("A", 2), ("B", 27), ("C", 14), ("D", 10), ("E", 9), ("F", 2), ("G", 9), ("H", 13), ("I", 13),
-                       ("J", 13), ("K", 2)):
-            ws.column_dimensions[col].width = w
-        ws["B5"] = ('=IF(PROJECT_MODE<>0,"Commercial mode is on – this page still shows the cost estimate for the same inputs.  ·  '
-                    'ይህ ገጽ ለተመሳሳይ ግብዓቶች የወጪ ግምቱን ያሳያል።","")')
-        ws["B5"].font = font(9, True, AMBER)
-        info = [(6, "Project · ፕሮጀክት", "=PROJ_NAME"),
-                (7, "Building · ሕንፃ", '=BTYPE_CALC&"  ·  "&TEXT(GFA,"#,##0")&" m² gross  ·  "&INDEX(L_FINISH,FIN_IX)&" finish"'),
-                (8, "Where & how long · ቦታና ጊዜ", '=INDEX(L_LOC,LOC_TYPE)&"  ·  "&CONSTR_EFF&" months of construction"')]
-        for r, lab, f in info:
-            ws.cell(r, 2, lab).font = font(9, True, SEC)
-            c = ws.cell(r, 3, f)
-            c.font = font(10, True, NAVY)
-        # tiles
-        tiles = [((2, 2), "CONSTRUCTION COST · የግንባታ ወጪ", "=CONSTR_COST", "n0",
-                  '="Range "&TEXT(CONSTR_COST*(1+EST_LOW)/1000000,"#,##0.0")&" – "&TEXT(CONSTR_COST*(1+EST_HIGH)/1000000,"#,##0.0")&" m"'),
-                 ((3, 5), "COST PER m² · ዋጋ በካሬ ሜትር", "=CC_M2", "n0",
-                  '="All-in incl. land & finance: "&TEXT(TDC_M2G,"#,##0")'),
-                 ((7, 8), "MONTHLY INSTALMENT · ወርሃዊ ክፍያ", "=LN_INSTAL_M", "n0",
-                  '=IF(HH_INCOME>0,TEXT(AFFORD_PCT,"0%")&" of income · "&AFFORD_TXT,"enter income")'),
-                 ((9, 10), "FUNDING GAP · የገንዘብ ክፍተት", "=FUND_GAP", "n0",
-                  '=IF(FUND_GAP>0.5,"find more funds","covered · በቂ ነው")')]
-        accents = [BLUE, TEAL, VIOLET, AMBER]
-        for k, ((c1, c2), lab, f, fmt, sub) in enumerate(tiles):
-            card(ws, 10, c1, 13, c2, bg=CANVAS)
-            for cc in range(c1, c2 + 1):
-                ws.cell(10, cc).border = Border(top=Side(style="thick", color=accents[k]))
-            if c2 > c1:
-                for rr in (10, 11, 13):
-                    ws.merge_cells(start_row=rr, start_column=c1, end_row=rr, end_column=c2)
-            ws.cell(10, c1, lab).font = font(8, True, SEC)
-            v = ws.cell(11, c1, f)
-            v.font = font(16, True, NAVY)
-            v.number_format = NF[fmt]
-            v.alignment = Alignment(horizontal="left")
-            s_ = ws.cell(13, c1, sub)
-            s_.font = font(8, False, SEC)
-        ws.row_dimensions[11].height = 24
-        # cost breakdown
-        title(15, 2, "COST BREAKDOWN · የወጪ ክፍፍል")
-        title(15, 7, "WHERE THE MONEY GOES")
-        hdr_row(16, (2, 3, 4), ("Item", "ETB", "% total"))
-        labs_am = ["መሠረትና ምድር ቤት", "ፍሬምና ግድግዳ", "የውስጥና ማጠናቀቂያ", "ኤሌክትሪክ፣ ቧንቧ፣ ሲስተሞች", "ቅድመ-ሥራና የውጭ ሥራ",
-                   "የዋጋ ጭማሪና መጠባበቂያ", "ክፍያዎችና ፈቃድ", "የቤት ዕቃዎች", "መሬት", "የብድር ወጪ"]
-        for k, cr in enumerate(b.CAT_ROWS):
-            r = 17 + k
-            ws.cell(r, 2, f"='22_Capex'!B{cr}").font = font(9)
-            ws.cell(r, 5, labs_am[k]).font = font(7, False, SEC, name=AMFONT)
-            c = ws.cell(r, 3, f"='22_Capex'!D{cr}")
-            c.number_format = NF["n0"]
-            c.font = font(9)
-            c2 = ws.cell(r, 4, f"=IF(HOME_TOTAL>0,C{r}/HOME_TOTAL,0)")
-            c2.number_format = NF["pct"]
-            c2.font = font(9)
-        tr = 17 + len(b.CAT_ROWS)
-        ws.cell(tr, 2, "TOTAL PROJECT COST · ጠቅላላ").font = F_BOLD
-        c = ws.cell(tr, 3, f"=SUM(C17:C{tr - 1})")
-        c.number_format = NF["n0"]
-        c.font = F_BOLD
-        c.fill = FILL_KEY
-        b.name("HOME_TOTAL", f"'02_Home'!$C${tr}")
-        for col in (2, 3, 4, 5):
-            ws.cell(tr, col).border = Border(top=Side(style="thin", color=INK))
-        ch = BarChart()
-        ch.type = "bar"
-        ch.style = 10
-        ch.legend = None
-        ch.y_axis.numFmt = '#,##0.0,,"m"'
-        ch.y_axis.majorGridlines = None
-        ch.add_data(Reference(ws, min_col=3, min_row=17, max_row=tr - 1), titles_from_data=False)
-        ch.set_categories(Reference(ws, min_col=2, min_row=17, max_row=tr - 1))
-        ch.series[0].graphicalProperties.solidFill = BLUE
-        ch.series[0].graphicalProperties.line.solidFill = BLUE
-        ch.x_axis.scaling.orientation = "maxMin"
-        ch.height, ch.width = 6.2, 9.6
-        ch.gapWidth = 40
-        axis_font(ch.x_axis, 650)
-        axis_font(ch.y_axis, 650)
-        ws.add_chart(ch, "G16")
-        # payment stages
-        r = tr + 2
-        title(r, 2, "PAYING THE CONTRACTOR · ለኮንትራክተር ክፍያ")
-        title(r, 7, "CASH NEEDED EACH MONTH (S-curve)")
-        hdr_row(r + 1, (2, 3, 4, 5), ("Stage", "ETB", "Cum. %", "≈ month"))
-        st0 = r + 2
-        stage_am = ["ቅድመ-ዝግጅት", "መሠረት", "ፍሬም", "ግድግዳና ጣሪያ", "ኤሌክትሪክ፣ ቧንቧ", "ማጠናቀቂያ"]
-        cumrow = f"'23_Construction'!$E${cm.rows['CUM']}:${pc(MON_C)}${cm.rows['CUM']}"
-        for k, sr in enumerate(b.STAGE_ROWS):
-            rr = st0 + k
-            ws.cell(rr, 2, f"='22_Capex'!B{sr}").font = font(9)
-            c = ws.cell(rr, 3, f"='22_Capex'!D{sr}")
-            c.number_format = NF["n0"]
-            c.font = font(9)
-            c2 = ws.cell(rr, 4, f"=IF(STAGE_TOT>0,SUM($C${st0}:C{rr})/STAGE_TOT,0)")
-            c2.number_format = NF["pct"]
-            c2.font = font(9)
-            c3 = ws.cell(rr, 5, f'=MIN(CONSTR_EFF,COUNTIF({cumrow},"<"&(D{rr}-0.0001))+1)')
-            c3.number_format = NF["int"]
-            c3.font = font(9)
-        rr = st0 + len(b.STAGE_ROWS)
-        ws.cell(rr, 2, "Retention released after completion").font = F_NOTE
-        c = ws.cell(rr, 3, "=RET_TOT")
-        c.number_format = NF["n0"]
-        c.font = font(9)
-        c = ws.cell(rr, 5, "=CONSTR_EFF+RET_REL_M")
-        c.number_format = NF["int"]
-        c.font = font(9)
-        ch2 = BarChart()
-        ch2.style = 10
-        ch2.y_axis.numFmt = '#,##0.0,,"m"'
-        ch2.y_axis.majorGridlines = None
-        cws = b.wb["23_Construction"]
-        ch2.add_data(Reference(cws, min_col=5, max_col=4 + MON_C, min_row=cm.rows["NEED"]), from_rows=True, titles_from_data=False)
-        ch2.set_categories(Reference(b.wb["20_Timeline"], min_col=5, max_col=4 + MON_C, min_row=b.TL["M_T"]))
-        ch2.series[0].graphicalProperties.solidFill = AMBER
-        ch2.series[0].graphicalProperties.line.solidFill = AMBER
-        ch2.legend = None
-        ch2.height, ch2.width = 4.2, 9.6
-        ch2.gapWidth = 30
-        axis_font(ch2.x_axis, 600)
-        axis_font(ch2.y_axis, 650)
-        ws.add_chart(ch2, f"G{st0 - 1}")
-        # funding & loan
-        r = rr + 2
-        title(r, 2, "FUNDING & HOME LOAN · ገንዘብና ብድር")
-        title(r, 7, "HOME-LOAN SCHEDULE · የብድር ሰንጠረዥ")
-        fl = [("Own savings · ቁጠባ", "=SAVINGS", "n0"), ("Family / diaspora · ቤተሰብ", "=FAMILY", "n0"),
-              ("Home loan drawn · የወጣ ብድር", "=DEBT_DRAWN", "n0"), ("Funding gap · ክፍተት", "=FUND_GAP", "n0"),
-              ("Interest rate · ወለድ", "=RATE_EFF", "pct"), ("Tenor after completion (yrs)", "=TENOR_Y", "int"),
-              ("Monthly instalment · ወርሃዊ ክፍያ", "=LN_INSTAL_M", "n0"), ("Total interest · ጠቅላላ ወለድ", "=LN_INT_TOT", "n0"),
-              ("Loan repaid by · የሚያልቅበት", "=LN_FINAL_DATE", "date"),
-              ("Instalment ÷ income · ከገቢ ድርሻ", "=IF(HH_INCOME>0,LN_INSTAL_M/HH_INCOME,0)", "pct"),
-              ("Affordability · የመክፈል አቅም", '=IF(HH_INCOME<=0,"n/a",IF(AFFORD_PCT<=AFFORD_MAX,"Affordable · ይቻላል",'
-                                               'IF(AFFORD_PCT<=AFFORD_MAX*1.25,"Stretch · ከባድ","Not affordable · አይቻልም")))', "gen")]
-        for k, (lab, f, fmt) in enumerate(fl):
-            rr2 = r + 1 + k
-            ws.cell(rr2, 2, lab).font = font(9)
-            ws.merge_cells(start_row=rr2, start_column=3, end_row=rr2, end_column=5)
-            c = ws.cell(rr2, 3, f)
-            c.number_format = NF[fmt]
-            c.font = font(9, True, NAVY)
-            c.alignment = Alignment(horizontal="right")
-        ar_ = r + len(fl)
-        b.name("AFFORD_PCT", f"'02_Home'!$C${ar_ - 1}")
-        b.name("AFFORD_TXT", f"'02_Home'!$C${ar_}")
-        ws.conditional_formatting.add(f"C{ar_}:E{ar_}", FormulaRule(formula=["AND(HH_INCOME>0,AFFORD_PCT<=AFFORD_MAX)"], fill=fill(GOOD_BG), font=Font(color=GOOD_FG, bold=True)))
-        ws.conditional_formatting.add(f"C{ar_}:E{ar_}", FormulaRule(formula=["AND(HH_INCOME>0,AFFORD_PCT>AFFORD_MAX)"], fill=fill(CRIT_BG), font=Font(color=CRIT_FG, bold=True)))
-        ws.conditional_formatting.add(f"C{r + 4}:E{r + 4}", FormulaRule(formula=["FUND_GAP>0.5"], fill=fill(CRIT_BG), font=Font(color=CRIT_FG, bold=True)))
-        hdr_row(r + 1, (7, 8, 9, 10), ("Year", "Interest", "Principal", "Closing"))
-        LYr = f"'27_Loan'!$E${ln.rows['LY']}:${pc(MON_L)}${ln.rows['LY']}"
-        Kr = f"'27_Loan'!$E${ln.rows['K']}:${pc(MON_L)}${ln.rows['K']}"
-        rowr = lambda k: f"'27_Loan'!$E${ln.rows[k]}:${pc(MON_L)}${ln.rows[k]}"
-        c = ws.cell(r + 2, 7, "Build")
-        c.font = font(8)
-        c = ws.cell(r + 2, 8, f"=SUMIFS({rowr('INT')},{LYr},0)")
-        c.number_format = NF["n0"]
-        c.font = font(8)
-        c = ws.cell(r + 2, 10, f"=SUMIFS({rowr('CLOSE')},{Kr},0)")
-        c.number_format = NF["n0"]
-        c.font = font(8)
-        for y in range(1, 21):
-            rr2 = r + 2 + y
-            c = ws.cell(rr2, 7, y)
-            c.number_format = NF["int"]
-            c.font = font(8)
-            c.alignment = Alignment(horizontal="left")
-            for col, k in ((8, "INT"), (9, "PRIN")):
-                f = f"=SUMIFS({rowr(k)},{LYr},$G{rr2})" + (f"+SUMIFS({rowr('SWP')},{LYr},$G{rr2})" if k == "PRIN" else "")
-                c = ws.cell(rr2, col, f)
-                c.number_format = NF["n0"]
-                c.font = font(8)
-            c = ws.cell(rr2, 10, f"=SUMIFS({rowr('CLOSE')},{Kr},12*$G{rr2})")
-            c.number_format = NF["n0"]
-            c.font = font(8)
-        # rent-out upgrade
-        ru = ar_ + 2
-        title(ru, 2, "OPTIONAL: RENT OUT PART · ከፊሉን ማከራየት")
-        rvr = b.sheets["24_Revenue"].rows
-        rows = [("Switched on? (Inputs block 2)", '=IF(RENT_HOME_F=1,"Yes · አዎ","No · አይ")', "gen"),
-                ("Rent income, first year · ኪራይ", f"=IF(RENT_HOME_F=1,'24_Revenue'!$I${rvr['RENT']},0)", "n0"),
-                ("Gross yield on total cost · ገቢ ከወጪ", f"=IF(AND(RENT_HOME_F=1,HOME_TOTAL>0),'24_Revenue'!$K${rvr['RENT']}/HOME_TOTAL,0)", "pct"),
-                ("Simple payback (years) · የመመለሻ ጊዜ", f"=IF(AND(RENT_HOME_F=1,'24_Revenue'!$K${rvr['RENT']}>0),HOME_TOTAL/'24_Revenue'!$K${rvr['RENT']},0)", "n1"),
-                ("Rent ÷ monthly instalment · የሚሸፍነው", f"=IF(AND(RENT_HOME_F=1,LN_INSTAL_M>0),'24_Revenue'!$I${rvr['RENT']}/12/LN_INSTAL_M,0)", "pct")]
-        for k, (lab, f, fmt) in enumerate(rows):
-            rr2 = ru + 1 + k
-            ws.cell(rr2, 2, lab).font = font(9)
-            ws.merge_cells(start_row=rr2, start_column=3, end_row=rr2, end_column=5)
-            c = ws.cell(rr2, 3, f)
-            c.number_format = NF[fmt]
-            c.font = font(9, True, NAVY)
-            c.alignment = Alignment(horizontal="right")
-        last = max(ru + 6, r + 23) + 1
-        ws.cell(last, 2, "Planning estimate only – get a priced BOQ from a licensed quantity surveyor before signing a contract.").font = F_NOTE
-        ws.cell(last + 1, 2, "ይህ ግምት ብቻ ነው፤ ውል ከመፈረምዎ በፊት ፈቃድ ካለው ባለሙያ የተዘጋጀ የሥራ መጠን ዝርዝር (BOQ) ያግኙ።").font = font(9, False, SEC, italic=True, name=AMFONT)
-        ws.print_area = f"A1:K{last + 2}"
-        ws.page_setup.orientation = "portrait"
-        ws.page_setup.fitToHeight = 1
-        ws.page_setup.fitToWidth = 1
         ws.freeze_panes = None
-    sh.raw(_h)
-    sh.r = 95
+    sh.raw(_s)
+    sh.r = 80
     return sh
 
 
@@ -795,7 +773,7 @@ def build_dashboard(b):
         for k, v in widths.items():
             ws.column_dimensions[k].width = v
         card(ws, 5, 2, 6, 18, bg=CANVAS)
-        for c, t in (("B5", "Scenario"), ("E5", "Checks"), ("H5", "Mode"), ("K5", "Verdict · ውሳኔ"), ("Q5", "Equity IRR hurdle")):
+        for c, t in (("B5", "Scenario"), ("E5", "Checks"), ("H5", "Project type"), ("K5", "Verdict · ውሳኔ"), ("Q5", "Equity IRR hurdle")):
             ws[c] = t
             ws[c].font = font(9, True, SEC)
         for c, f in (("C5", "=SCEN_NAME"), ("F5", '=CHK_PASS&" / "&CHK_TOTAL&" pass"'), ("I5", "=MODE_NAME"),
@@ -805,26 +783,26 @@ def build_dashboard(b):
         ws["R5"].number_format = NF["pct"]
         ws.merge_cells("L5:O5")
         ws["L5"].alignment = Alignment(horizontal="center")
-        for rule_f, bg, fg in (('VERDICT="VIABLE"', GOOD_BG, GOOD_FG), ('VERDICT="MARGINAL"', WARN_BG, WARN_FG),
-                               ('VERDICT="NOT VIABLE"', CRIT_BG, CRIT_FG)):
+        # local helpers (column U) – Google Sheets conditional formats may only read cells on the same sheet
+        ws["U4"] = "helpers"
+        for r_, f_ in ((5, "=VERDICT"), (6, "=CHK_FAIL"), (7, "=IF(EIRR<HURDLE,1,0)"), (8, "=DSCR_OK"), (9, "=FLEX_ON")):
+            ws.cell(r_, 21, f_).font = font(8, False, SEC)
+        ws["U4"].font = font(8, False, SEC)
+        for rule_f, bg, fg in (('$U$5="VIABLE"', GOOD_BG, GOOD_FG), ('$U$5="MARGINAL"', WARN_BG, WARN_FG),
+                               ('$U$5="NOT VIABLE"', CRIT_BG, CRIT_FG)):
             ws.conditional_formatting.add("L5:O5", FormulaRule(formula=[rule_f], fill=fill(bg), font=Font(color=fg, bold=True)))
-        ws.conditional_formatting.add("F5", FormulaRule(formula=["CHK_FAIL>0"], font=Font(color=CRIT_FG, bold=True)))
-        ws["B6"] = ('=IF(PROJECT_MODE=0,"Home view – tiles show the cost estimate; open the Home Estimate page for the full picture.",'
-                    '"Commercial view – ETB; IRR on dated cash flows (XIRR); verdict = equity IRR vs hurdle, profit on cost and DSCR covenant.")')
+        ws.conditional_formatting.add("F5", FormulaRule(formula=["$U$6>0"], font=Font(color=CRIT_FG, bold=True)))
+        ws["B6"] = ('=IF(FLEX_ON=1,"⚠ What-if dials on sheet 52 are changed – these are NOT base-case results.",'
+                    '"ETB; IRR on dated cash flows (XIRR); verdict = equity IRR vs hurdle, profit on cost and DSCR covenant.")')
+        ws.conditional_formatting.add("B6:R6", FormulaRule(formula=["$U$9=1"], fill=fill(WARN_BG), font=Font(color=WARN_FG, bold=True)))
         ws["B6"].font = font(8, False, SEC, italic=True)
         tiles = [
-            ('=IF(PROJECT_MODE=0,"TOTAL PROJECT COST","TOTAL DEVELOPMENT COST")', "=TDC", "m",
-             '="ETB  ·  "&TEXT(TDC_M2G,"#,##0")&" per m² gross"'),
-            ('=IF(PROJECT_MODE=0,"COST PER m²","GROSS DEVELOPMENT VALUE")', "=IF(PROJECT_MODE=0,TEXT(CC_M2,\"#,##0\"),GDV)",
-             "m", '=IF(PROJECT_MODE=0,"construction cost per m²","GDV ÷ TDC = "&TEXT(GDV_TDC,"0.00")&"x")'),
-            ('=IF(PROJECT_MODE=0,"MONTHLY INSTALMENT","PROFIT ON COST")', "=IF(PROJECT_MODE=0,TEXT(LN_INSTAL_M,\"#,##0\"),POC)",
-             "pct", '=IF(PROJECT_MODE=0,"home loan","margin on GDV "&TEXT(DEV_MARGIN,"0.0%"))'),
-            ('=IF(PROJECT_MODE=0,"FUNDING GAP","EQUITY IRR")', "=IF(PROJECT_MODE=0,TEXT(FUND_GAP,\"#,##0\"),EIRR)", "pct",
-             '=IF(PROJECT_MODE=0,IF(FUND_GAP>0.5,"to be found","fully funded"),"hurdle "&TEXT(HURDLE,"0.0%")&IF(EIRR>=HURDLE,"  ✓ above","  ✗ below"))'),
-            ('=IF(PROJECT_MODE=0,"LOAN DRAWN","PEAK DEBT")', "=IF(PROJECT_MODE=0,DEBT_DRAWN,PEAK_DEBT)", "m",
-             '="incl. capitalised IDC "&TEXT(IDC_TOT/1000000,"#,##0.0")&" m"'),
-            ('=IF(PROJECT_MODE=0,"AFFORDABILITY","MIN DSCR")', "=IF(PROJECT_MODE=0,TEXT(AFFORD_PCT,\"0%\"),MIN_DSCR)", "x",
-             '=IF(PROJECT_MODE=0,AFFORD_TXT,"covenant "&TEXT(DSCR_COV,"0.00")&"x"&IF(DSCR_OK=1,"  ✓ met","  ✗ breached"))'),
+            ("TOTAL DEVELOPMENT COST", "=TDC", "m", '="ETB  ·  "&TEXT(TDC_M2G,"#,##0")&" per m² gross"'),
+            ("GROSS DEVELOPMENT VALUE", "=GDV", "m", '="GDV ÷ TDC = "&TEXT(GDV_TDC,"0.00")&"x"'),
+            ("PROFIT ON COST", "=POC", "pct", '="margin on GDV "&TEXT(DEV_MARGIN,"0.0%")'),
+            ("EQUITY IRR", "=EIRR", "pct", '="hurdle "&TEXT(HURDLE,"0.0%")&IF(EIRR>=HURDLE,"  ✓ above","  ✗ below")'),
+            ("PEAK DEBT", "=PEAK_DEBT", "m", '="incl. capitalised IDC "&TEXT(IDC_TOT/1000000,"#,##0.0")&" m"'),
+            ("MIN DSCR", "=MIN_DSCR", "x", '="covenant "&TEXT(DSCR_COV,"0.00")&"x"&IF(DSCR_OK=1,"  ✓ met","  ✗ breached")'),
         ]
         cols = [2, 5, 8, 11, 14, 17]
         acc = [BLUE, TEAL, VIOLET, AMBER, ROSE, NAVY]
@@ -847,10 +825,10 @@ def build_dashboard(b):
             s_ = ws.cell(12, c0, sub)
             s_.font = font(8, False, SEC)
         ws.row_dimensions[10].height = 28
-        ws.conditional_formatting.add("K10:L10", FormulaRule(formula=["AND(PROJECT_MODE<>0,EIRR<HURDLE)"], font=Font(color=CRIT_FG, bold=True)))
-        ws.conditional_formatting.add("Q10:R10", FormulaRule(formula=["AND(PROJECT_MODE<>0,DSCR_OK=0)"], font=Font(color=CRIT_FG, bold=True)))
+        ws.conditional_formatting.add("K10:L10", FormulaRule(formula=["$U$7=1"], font=Font(color=CRIT_FG, bold=True)))
+        ws.conditional_formatting.add("Q10:R10", FormulaRule(formula=["$U$8=0"], font=Font(color=CRIT_FG, bold=True)))
         # chart data block
-        d0 = 62
+        d0 = 70
         ws.cell(d0, 2, "Chart data (linked – do not edit)").font = font(9, True, SEC)
         rt = b.sheets["50_Returns"].rows
         pb = b.sheets["51_Payback"].rows
@@ -904,7 +882,7 @@ def build_dashboard(b):
         ctitle("N14", "(b) DSCR by year vs covenant · x (capped at 10)")
         ctitle("B28", "(c) Revenue mix · ETB m")
         ctitle("H28", "(d) Development cost breakdown · ETB m")
-        ctitle("N28", "Tornado – Equity IRR swing (±20%, delay +6 mo)")
+        ctitle("N28", "Tornado – change in project value, ETB m (±20%; delay +6 mo)")
         a = mk_bar([R(1)], [BLUE])
         ln_ = LineChart()
         ln_.add_data(Reference(ws, min_col=2, max_col=2 + ANN_N, min_row=R(2)), from_rows=True, titles_from_data=True)
@@ -948,8 +926,8 @@ def build_dashboard(b):
         tc.add_data(Reference(se, min_col=5, max_col=6, min_row=t0 + 1, max_row=t0 + n), titles_from_data=False)
         tc.set_categories(Reference(se, min_col=2, min_row=t0 + 1, max_row=t0 + n))
         from openpyxl.chart.series import SeriesLabel
-        tc.series[0].tx = SeriesLabel(v="Low case")
-        tc.series[1].tx = SeriesLabel(v="High case")
+        tc.series[0].tx = SeriesLabel(v="Adverse")
+        tc.series[1].tx = SeriesLabel(v="Favourable")
         tc.series[0].graphicalProperties.solidFill = ROSE
         tc.series[0].graphicalProperties.line.solidFill = ROSE
         tc.series[1].graphicalProperties.solidFill = TEAL
@@ -959,7 +937,7 @@ def build_dashboard(b):
         tc.gapWidth = 40
         tc.x_axis.scaling.orientation = "maxMin"
         tc.x_axis.tickLblPos = "low"
-        tc.y_axis.numFmt = "0%"
+        tc.y_axis.numFmt = "#,##0"
         tc.y_axis.majorGridlines = None
         tc.legend.position = "b"
         tc.height, tc.width = 6.0, 11.6
@@ -971,8 +949,9 @@ def build_dashboard(b):
         ws.cell(s0, 2, "SOURCES & USES – construction period (ETB)").font = font(11, True, NAVY)
         cmr = b.sheets["23_Construction"].rows
         uses = [("TDC", "=TDC"),
-                ("Capex VAT (refundable)", f"=SUM('23_Construction'!$E${cmr['VATC']}:${pc(MON_C)}${cmr['VATC']})"),
-                ("Lease paid in build", f"=SUM('23_Construction'!$E${cmr['LSI']}:${pc(MON_C)}${cmr['LSINT']})")]
+                ("Capex VAT (refund)", f"=SUM('23_Construction'!$E${cmr['VATC']}:${pc(MON_C)}${cmr['VATC']})"),
+                ("Lease paid in build", f"=SUM('23_Construction'!$E${cmr['LSI']}:${pc(MON_C)}${cmr['LSINT']})"),
+                ("Pre-opening cost", "=PREOP_TOT")]
         srcs = [("Equity committed", "=EQ_DRAWN"), ("Top-up / gap", "=FUND_GAP"), ("Bank debt drawn", "=DEBT_DRAWN"),
                 ("Presale cash used", "=PS_USED"), ("IDC capitalised", "=IDC_TOT"),
                 ("Land non-cash", "=LAND_TOT-LANDCASH_TOT"), ("Retention held", "=RET_TOT")]
@@ -1008,12 +987,13 @@ def build_dashboard(b):
         ws.cell(s0, 11, "ALERTS · ማስጠንቀቂያዎች").font = font(11, True, NAVY)
         alerts = [
             '=IF(CHK_FAIL>0,"✗ "&CHK_FAIL&" model check(s) failing – see sheet 60","✓ All model checks pass")',
-            '=IF(PROJECT_MODE=0,"–",IF(N_BREACH>0,"✗ DSCR below covenant in "&N_BREACH&" year(s)","✓ DSCR covenant met"))',
+            '=IF(N_BREACH>0,"✗ DSCR below covenant in "&N_BREACH&" year(s)","✓ DSCR covenant met")',
             '=IF(FUND_GAP>0.5,"✗ Funding gap of "&TEXT(FUND_GAP,"#,##0")&" ETB","✓ Funding fully covered")',
-            '=IF(PROJECT_MODE=0,"–",IF(N_LOWCASH>0,"! Cash below minimum in "&N_LOWCASH&" year(s)","✓ Cash above minimum"))',
-            '=IF(PROJECT_MODE=0,"–",IF(N_IMPAIR>0,"! IAS 36 impairment indicator in "&N_IMPAIR&" year(s)","✓ No impairment indicator"))',
+            '=IF(N_LOWCASH>0,"! Cash below minimum in "&N_LOWCASH&" year(s)","✓ Cash above minimum")',
+            '=IF(N_IMPAIR>0,"! IAS 36 impairment indicator in "&N_IMPAIR&" year(s)","✓ No impairment indicator")',
             '=IF(AND(FAR>0,FAR_ACT>FAR),"! FAR "&TEXT(FAR_ACT,"0.00")&" exceeds permitted "&TEXT(FAR,"0.00"),"✓ FAR within limit")',
-            '=IF(PROJECT_MODE=0,"–",IF(EIRR<HURDLE,"! Equity IRR below hurdle","✓ Equity IRR above hurdle"))',
+            '=IF(EIRR<HURDLE,"! Equity IRR below hurdle","✓ Equity IRR above hurdle")',
+            '=IF(N_LOWCONF>0,"! "&N_LOWCONF&" input(s) marked Low confidence – firm them up (10 Inputs, column K)","✓ No Low-confidence inputs")',
             '="! Tax rates must be verified (sheet 12) · የግብር መጣኔዎችን ያረጋግጡ"',
         ]
         for k, f in enumerate(alerts):
@@ -1022,7 +1002,39 @@ def build_dashboard(b):
         ws.conditional_formatting.add(rng, FormulaRule(formula=[f'LEFT(K{s0 + 1},1)="✗"'], font=Font(color=CRIT_FG, bold=True)))
         ws.conditional_formatting.add(rng, FormulaRule(formula=[f'LEFT(K{s0 + 1},1)="!"'], font=Font(color=WARN_FG, bold=True)))
         ws.conditional_formatting.add(rng, FormulaRule(formula=[f'LEFT(K{s0 + 1},1)="✓"'], font=Font(color=GOOD_FG)))
-        ws.print_area = "A1:S52"
+        # key findings – plain-language commentary that rewrites itself
+        f0 = 54
+        ws.cell(f0, 2, "KEY FINDINGS – written by the model from the live numbers  ·  ዋና ዋና ግኝቶች").font = font(11, True, NAVY)
+        for cc in range(2, 19):
+            ws.cell(f0, cc).border = BOTTOM_AMBER
+        finds = [
+            '=PROJ_NAME&" · type: "&MODE_NAME&" · "&SCEN_NAME&" scenario → verdict: "&VERDICT&" ("&VERDICT_AM&")."',
+            '="Returns: equity IRR "&TEXT(EIRR,"0.0%")&" against a "&TEXT(HURDLE,"0.0%")&" hurdle; project IRR "&TEXT(PIRR,"0.0%")&'
+            '"; profit on cost "&TEXT(POC,"0.0%")&"; equity multiple "&TEXT(EMOIC,"0.00")&"x."',
+            '="Cost & funding: TDC ETB "&TEXT(TDC/1000000,"#,##0.0")&" m ("&TEXT(TDC_M2G,"#,##0")&" per m² gross), funded by equity "&'
+            'TEXT(EQ_DRAWN/1000000,"#,##0.0")&" m, bank debt "&TEXT(DEBT_DRAWN/1000000,"#,##0.0")&" m and presales "&TEXT(PS_USED/1000000,"#,##0.0")&" m"&'
+            'IF(FUND_GAP>0.5,"; a funding gap of "&TEXT(FUND_GAP/1000000,"#,##0.0")&" m is still open.",".")',
+            '=IF(N_DS_YEARS=0,"Lender view: no debt service in the horizon.","Lender view: minimum DSCR "&TEXT(MIN_DSCR,"0.00")&"x against a "&'
+            'TEXT(DSCR_COV,"0.00")&"x covenant"&IF(N_BREACH>0," – breached in "&N_BREACH&" year(s), when dividends are locked up."," – met in every repayment year.")&'
+            '" Peak debt ETB "&TEXT(PEAK_DEBT/1000000,"#,##0.0")&" m, repaid by "&TEXT(LN_FINAL_DATE,"mmm yyyy")&".")',
+            '="Income: stabilised NOI ETB "&TEXT(NOI_STAB/1000000,"#,##0.0")&" m a year → yield on cost "&TEXT(YOC,"0.0%")&" vs exit cap rate "&'
+            'TEXT(EXIT_CAP_EFF,"0.0%")&IF(YOC>EXIT_CAP_EFF," (positive development spread)."," (no development spread – value relies on sales).")',
+            '="Biggest risk on the tornado: "&TOP_RISK&". "&IF(PNPV<0,"Project NPV is negative.",IF(BE_RENT_NPV>0,"Rents can fall "&'
+            'TEXT(1-BE_RENT_NPV,"0%")&" before NPV reaches zero","")&IF(BE_COST>0,"; costs can overrun "&TEXT(BE_COST,"0%")&" before equity IRR drops below the hurdle.","."))',
+            '=IF(NCI_PCT>0,"Land partner contributes the plot in kind and holds "&TEXT(NCI_PCT,"0%")&" of equity as a non-controlling interest.",'
+            '"Land: "&INDEX(L_LAND,LAND_TYPE)&".")&IF(N_LOWCONF>0," "&N_LOWCONF&" input(s) are marked Low confidence – test them on sheet 52.",'
+            '" No input is marked Low confidence.")',
+        ]
+        for k, f in enumerate(finds):
+            r_ = f0 + 1 + k
+            ws.cell(r_, 2, "•").font = font(10, True, AMBER)
+            ws.cell(r_, 2).alignment = Alignment(horizontal="right", vertical="top")
+            ws.merge_cells(start_row=r_, start_column=3, end_row=r_, end_column=18)
+            c = ws.cell(r_, 3, f)
+            c.font = font(10, False, INK)
+            c.alignment = Alignment(wrap_text=True, vertical="top")
+            ws.row_dimensions[r_].height = 27
+        ws.print_area = "A1:S62"
         ws.page_setup.fitToHeight = 1
         ws.freeze_panes = None
     sh.raw(_d)

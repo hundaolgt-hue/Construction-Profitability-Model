@@ -1,33 +1,49 @@
-import sys, json
+"""Run the model across tracks, project types, data sets and scenarios; report errors, checks and key results."""
+import sys
 from harness import run_many, values, nm
 src = sys.argv[1]
 which = sys.argv[2] if len(sys.argv) > 2 else "full"
 specs = []
 if which in ("full", "modes"):
     for d in (2, 3):
-        for m in range(4):
-            specs.append((f"d{d}_m{m}_s1", dict(mode=m, data=d, scen=1)))
+        for m in (1, 2, 3):
+            specs.append((f"d{d}_m{m}_s1", dict(track=2, mode=m, data=d, scen=1)))
 if which in ("full", "scen"):
-    for d in (2, 3):
+    for d, m in ((2, 3), (3, 2)):
         for s in (2, 3, 4):
-            specs.append((f"d{d}_m{3 if d==3 else 0}_s{s}", dict(mode=3 if d == 3 else 0, data=d, scen=s)))
+            specs.append((f"d{d}_m{m}_s{s}", dict(track=2, mode=m, data=d, scen=s)))
+if which in ("full", "private"):
+    for pd in (1, 2):
+        specs.append((f"priv_p{pd}", dict(track=1, pdata=pd)))
 if which == "blank":
-    for m in range(4):
+    for m in (1, 2, 3):
         for s in (1, 3):
-            specs.append((f"blank_m{m}_s{s}", dict(mode=m, data=1, scen=s)))
+            specs.append((f"blank_m{m}_s{s}", dict(track=2, mode=m, data=1, scen=s)))
+    specs.append(("blank_priv", dict(track=1, pdata=1)))
 res = run_many(src, specs, workers=4, keep_dir=f"/tmp/claude-0/qa_{which}")
-keys = ["TDC", "HOME_TOTAL", "CONSTR_COST", "FUND_GAP", "LN_INSTAL_M", "PEAK_DEBT", "EIRR", "PIRR", "POC", "MIN_DSCR", "VERDICT", "CHK_PASS", "CHK_FAIL", "CHK_WARN"]
+keys = ["TDC", "FUND_GAP", "PEAK_DEBT", "EIRR", "PIRR", "POC", "MIN_DSCR", "NCI_PCT", "VERDICT", "CHK_PASS", "CHK_FAIL", "CHK_WARN",
+        "P_TOTAL", "P_INSTAL", "PCHK_PASS", "PCHK_FAIL", "PCHK_WARN"]
+
+
+def f(v):
+    return f"{v:,.3f}" if isinstance(v, float) and abs(v) < 10 else (f"{v:,.0f}" if isinstance(v, (int, float)) else str(v))
+
+
+nfail = 0
 for tag, (r, p) in sorted(res.items()):
     if "error" in r:
-        print(tag, "RECALC ERROR", r["error"]); continue
+        print(tag, "RECALC ERROR", r["error"])
+        continue
     wb = values(p)
     vals = {k: nm(wb, k) for k in keys}
-    fails = []
-    ws = wb["60_Checks"]
-    for row in range(9, 45):
-        st = ws.cell(row, 6).value
-        if st in ("FAIL", "WARN"):
-            fails.append(f"{st}:{ws.cell(row,2).value[:3]}={ws.cell(row,4).value:.4g}" if isinstance(ws.cell(row,4).value,(int,float)) else f"{st}:{ws.cell(row,2).value[:3]}")
-    def f(v):
-        return f"{v:,.3f}" if isinstance(v, float) and abs(v) < 10 else (f"{v:,.0f}" if isinstance(v, (int, float)) else str(v))
-    print(f"{tag:12} err={r.get('total_errors')} " + " ".join(f"{k}={f(v)}" for k, v in vals.items()), fails)
+    flags = []
+    for sname in ("60_Checks", "P4_Checks"):
+        ws = wb[sname]
+        for row in range(5, 50):
+            st = ws.cell(row, 6).value
+            if st in ("FAIL", "WARN"):
+                v = ws.cell(row, 4).value
+                flags.append(f"{st}:{ws.cell(row, 2).value[:3]}" + (f"={v:.4g}" if isinstance(v, (int, float)) else ""))
+                nfail += st == "FAIL"
+    print(f"{tag:12} err={r.get('total_errors')} " + " ".join(f"{k}={f(v)}" for k, v in vals.items()), flags)
+print("TOTAL FAIL:", nfail)

@@ -1,6 +1,5 @@
 """Statements (40–43), analysis (50–52) and checks (60)."""
 from openpyxl.styles import Alignment, Font
-from openpyxl.worksheet.formula import DataTableFormula
 from openpyxl.formatting.rule import FormulaRule, CellIsRule
 from core import (Sheet, pc, CL, NF, ANN_N, MON_C, MON_L, font, fill, F_BODY, F_BOLD, F_UNIT, F_NOTE, FILL_INPUT, F_INPUT,
                   BOX, NAVY, SEC, INK, AMBER, GOOD_FG, GOOD_BG, WARN_FG, WARN_BG, CRIT_FG, CRIT_BG, FILL_KEY,
@@ -50,10 +49,10 @@ def build_fin(b):
     pl.sec("Operating expenses", "የሥራ ማስኬጃ ወጪ")
     for k, lab in (("PROP", "Property operating costs"), ("MGMT", "Management fee"), ("INS", "Insurance"),
                    ("PTAX", "Property tax"), ("MAINT", "Maintenance"), ("MKT", "Marketing"), ("OVH", "Owner overheads"),
-                   ("BAD", "Bad debts")):
+                   ("PREOP", "Pre-opening & launch marketing"), ("BAD", "Bad debts")):
         pl.line(k, lab, (lambda k: lambda i: f"-{OX(k, i)}")(k), fmt="k", unit=U)
     pl.line("OPEX", "Total operating expenses",
-            lambda i: "+".join(p(k, i) for k in ("PROP", "MGMT", "INS", "PTAX", "MAINT", "MKT", "OVH", "BAD")), fmt="k", unit=U,
+            lambda i: "+".join(p(k, i) for k in ("PROP", "MGMT", "INS", "PTAX", "MAINT", "MKT", "OVH", "PREOP", "BAD")), fmt="k", unit=U,
             style="total")
     pl.line("EBITDA", "EBITDA", lambda i: f"{p('GP', i)}+{p('OPEX', i)}", fmt="k", unit=U, style="key")
     pl.line("DIP", "Depreciation – investment property", lambda i: f"-{AS('DEP_IP', i)}", fmt="k", unit=U)
@@ -73,7 +72,7 @@ def build_fin(b):
     pl.line("PAT_OWN", "  attributable to owners", lambda i: f"{p('PAT', i)}-{p('PAT_NCI', i)}", fmt="k", unit=U)
     pl.sec("Appropriations", "የትርፍ ድልድል")
     pl.line("LRT", "Transfer to legal reserve (Commercial Code)",
-            lambda i: f"IF(AND(PROJECT_MODE<>0,{p('PAT', i)}>0),MAX(0,MIN(LR_PCT*{p('PAT', i)},LR_CAP*({X('41_BS', 'SC', i - 1) if i > 1 else '0'}+{X('42_CF', 'EQ', i)})-{pp('LRB', i)})),0)",
+            lambda i: f"IF({p('PAT', i)}>0,MAX(0,MIN(LR_PCT*{p('PAT', i)},LR_CAP*({X('41_BS', 'SC', i - 1) if i > 1 else '0'}+{X('42_CF', 'EQ', i)})-{pp('LRB', i)})),0)",
             fmt="k", unit=U)
     pl.line("LRB", "Legal reserve balance", lambda i: f"{pp('LRB', i)}+{p('LRT', i)}", fmt="k", unit=U, tot="last")
     pl.line("DIVD", "Dividends paid (incl. special)", lambda i: f"-{X('42_CF', 'DIV', i)}", fmt="k", unit=U)
@@ -123,16 +122,16 @@ def build_fin(b):
     cf.line("LOCK", "Dividend lock-up flag (DSCR below covenant)",
             lambda i: f"IF(AND({LN('A_CLOSE', i)}>0,{X('43_Ratios', 'DSCRN', i)}<DSCR_COV),1,0)", fmt="int", unit="flag")
     cf.line("DIVP", "Dividends (positive)",
-            lambda i: 0 if i <= 4 else (f"IF(AND(PROJECT_MODE<>0,{c('LOCK', i)}=0),MAX(0,MIN(DIV_PAYOUT*MAX(0,{X('40_PL', 'PAT', i)}-{X('40_PL', 'LRT', i)}),"
+            lambda i: 0 if i <= 4 else (f"IF({c('LOCK', i)}=0,MAX(0,MIN(DIV_PAYOUT*MAX(0,{X('40_PL', 'PAT', i)}-{X('40_PL', 'LRT', i)}),"
                                         f"{c('CASHPRE', i)}-MIN_CASH,{X('40_PL', 'RETOT', i - 1)}+{X('40_PL', 'PAT', i)}-{X('40_PL', 'LRT', i)})),0)"),
             fmt="k", unit=U)
     cf.line("DIVX", "Special dividend of surplus cash (positive)",
-            lambda i: 0 if i <= 4 else (f"IF(AND(PROJECT_MODE<>0,DIST_SURPLUS=1,{c('LOCK', i)}=0),MAX(0,MIN({c('CASHPRE', i)}-{c('DIVP', i)}-{c('CRP', i)}-MIN_CASH,"
+            lambda i: 0 if i <= 4 else (f"IF(AND(DIST_SURPLUS=1,{c('LOCK', i)}=0),MAX(0,MIN({c('CASHPRE', i)}-{c('DIVP', i)}-{c('CRP', i)}-MIN_CASH,"
                                         f"{X('40_PL', 'RETOT', i - 1)}+{X('40_PL', 'PAT', i)}-{X('40_PL', 'LRT', i)}-{c('DIVP', i)})),0)"),
             fmt="k", unit=U)
     cf.line("DIV", "Dividends paid", lambda i: f"-({c('DIVP', i)}+{c('DIVX', i)})", fmt="k", unit=U)
     cf.line("CRP", "Return of surplus capital (positive)",
-            lambda i: 0 if i <= 4 else (f"IF(AND(PROJECT_MODE<>0,DIST_SURPLUS=1,{c('LOCK', i)}=0),MAX(0,MIN({c('CASHPRE', i)}-{c('DIVP', i)}-MIN_CASH,"
+            lambda i: 0 if i <= 4 else (f"IF(AND(DIST_SURPLUS=1,{c('LOCK', i)}=0),MAX(0,MIN({c('CASHPRE', i)}-{c('DIVP', i)}-MIN_CASH,"
                                         f"{X('41_BS', 'SC', i - 1)}+{c('EQ', i)}-IF(LAND_TYPE=2,LAND_TOT,0))),0)"),
             fmt="k", unit=U)
     cf.line("CR", "Capital returned to shareholders", lambda i: f"-{c('CRP', i)}", fmt="k", unit=U)
@@ -250,7 +249,7 @@ def build_fin(b):
     rt.scalar("NOI10", "NOI in O10", lambda: f"'24_Revenue'!$R${b.sheets['24_Revenue'].rows['NOI']}", name="NOI_O10")
     rt.scalar("NOI3", "Stabilised NOI (O3)", lambda: f"'24_Revenue'!$K${b.sheets['24_Revenue'].rows['NOI']}", name="NOI_STAB")
     rt.scalar("TVG", "Terminal value (gross)",
-              "IF(PROJECT_MODE=0,0,MAX(0,IF(EXIT_METHOD=1,NOI_O10*(1+RESC_EFF)/EXIT_CAP_EFF,NOI_O10*EXIT_MULT)))", name="TV_GROSS")
+              "MAX(0,IF(EXIT_METHOD=1,NOI_O10*(1+RESC_EFF)/EXIT_CAP_EFF,NOI_O10*EXIT_MULT))", name="TV_GROSS")
     rt.scalar("TVN", "Terminal value net of exit costs", "TV_GROSS*(1-EXIT_COST)", name="TV_NET", style="key")
     rt.scalar("EQX", "Equity exit value (owners' book equity + TV uplift)",
               lambda: f"'41_BS'!$R${b.sheets['41_BS'].rows['EQO']}+(TV_NET-'41_BS'!$R${b.sheets['41_BS'].rows['IP']}-'41_BS'!$R${b.sheets['41_BS'].rows['PPE']})*(1-NCI_PCT)",
@@ -295,7 +294,7 @@ def build_fin(b):
               name="PMOIC")
     rt.scalar("SNOM", "Sales revenue (nominal, net)", lambda: XT("24_Revenue", "SALES_REV"), name="SALES_NOM")
     rt.scalar("RVAL", "Value of retained property at stabilisation (NOI O3 ÷ exit cap)",
-              "IF(PROJECT_MODE=0,0,MAX(0,NOI_STAB/EXIT_CAP_EFF))", name="RET_VALUE")
+              "MAX(0,NOI_STAB/EXIT_CAP_EFF)", name="RET_VALUE")
     rt.scalar("GDV", "Gross development value (GDV)", "SALES_NOM+RET_VALUE", name="GDV", style="key")
     rt.scalar("POC", "Profit on cost", "IF(TDC>0,(GDV-TDC)/TDC,0)", fmt="pct", unit="%", name="POC", style="key")
     rt.scalar("DM", "Development margin (profit ÷ GDV)", "IF(GDV>0,(GDV-TDC)/GDV,0)", fmt="pct", unit="%", name="DEV_MARGIN")
@@ -307,9 +306,9 @@ def build_fin(b):
     rt.scalar("DOK", "DSCR test passed (or no debt service)", "IF(N_DS_YEARS=0,1,IF(MIN_DSCR>=DSCR_COV,1,0))", fmt="int",
               unit="flag", name="DSCR_OK")
     rt.scalar("VERD", "VERDICT",
-              '=IF(PROJECT_MODE=0,"HOME ESTIMATE",IF(TDC<=0,"NO DATA",IF(AND(EIRR>=HURDLE,POC>0,DSCR_OK=1),"VIABLE",IF(AND(EIRR>=HURDLE-MARGIN_BAND,GDV>=TDC),"MARGINAL","NOT VIABLE"))))'[1:],
+              '=IF(TDC<=0,"NO DATA",IF(AND(EIRR>=HURDLE,POC>0,DSCR_OK=1),"VIABLE",IF(AND(EIRR>=HURDLE-MARGIN_BAND,GDV>=TDC),"MARGINAL","NOT VIABLE")))'[1:],
               fmt="gen", unit="", name="VERDICT", style="key")
-    rt.scalar("VERDAM", "ውሳኔ", '=IF(VERDICT="VIABLE","አዋጭ",IF(VERDICT="MARGINAL","በድንበር ላይ",IF(VERDICT="NOT VIABLE","አዋጭ አይደለም",IF(VERDICT="NO DATA","መረጃ የለም","የቤት ወጪ ግምት"))))'[1:],
+    rt.scalar("VERDAM", "ውሳኔ", '=IF(VERDICT="VIABLE","አዋጭ",IF(VERDICT="MARGINAL","በድንበር ላይ",IF(VERDICT="NOT VIABLE","አዋጭ አይደለም","መረጃ የለም")))'[1:],
               fmt="gen", unit="", name="VERDICT_AM")
     rt.gap()
     rt.sec("IAS 36 – impairment test summary", "የንብረት ዋጋ መቀነስ ፈተና")
@@ -345,20 +344,31 @@ def build_fin(b):
 
 
 def build_sens(b):
-    """52 Sensitivity & break-even – flex cells + Data Tables (live)."""
+    """52 Sensitivity & break-even – live what-if dials, first-order tornado and closed-form break-evens.
+
+    No Excel Data Tables: everything recalculates in Excel, LibreOffice and Google Sheets alike."""
     X = lambda sh, key, i: b.sheets[sh].c(key, i, sheet=True)
-    se = Sheet(b, "52_Sensitivity", "52 · Sensitivity & break-even (LIVE)", "የስጋት ትንተናና የትርፍ-ኪሳራ ሚዛን ነጥብ", TAB_AN,
-               kind="free", n=0, banner=True, width_label=40)
+    T = lambda key, i: f"'20_Timeline'!{pc(i)}{b.TL[key]}"
+    C23 = "23_Construction"
+    cmr = b.sheets[C23].rows
+    SUMC = lambda key, i: f"SUMIFS('{C23}'!$E${cmr[key]}:${pc(MON_C)}${cmr[key]},'{C23}'!$E${cmr['PIDX']}:${pc(MON_C)}${cmr['PIDX']},{T('T_P', i)})"
+    se = Sheet(b, "52_Sensitivity", "52 · Sensitivity & break-even (LIVE)", "የስጋት ትንተናና የሚዛን ነጥብ", TAB_AN,
+               kind="free", n=0, width_label=58)
     ws = se.ws
-    se.sec("Flex cells – change one and every output updates (100% = as input)", "የማስተካከያ ሕዋሶች")
+    se.sec("What-if dials – change one and every sheet updates (100% = as input). Put them back to 100% / 0 afterwards.",
+           "የማስተካከያ ሕዋሶች")
     flex = [("FLX_PRICE", "Sale price", 1.0, "pct"), ("FLX_COST", "Construction cost", 1.0, "pct"),
-            ("FLX_RENT", "Rent", 1.0, "pct"), ("FLX_OCC", "Occupancy", 1.0, "pct"), ("FLX_RATE", "Interest rate", 1.0, "pct"),
-            ("FLX_OPEX", "Operating costs", 1.0, "pct"), ("FLX_DELAY", "Extra construction delay (months)", 0, "int"),
-            ("SCEN_OVR", "Scenario override for the scenario grid (0 = use Start)", 0, "int")]
+            ("FLX_RENT", "Rent and hotel rate", 1.0, "pct"), ("FLX_OCC", "Occupancy", 1.0, "pct"),
+            ("FLX_RATE", "Interest rate", 1.0, "pct"), ("FLX_OPEX", "Operating costs", 1.0, "pct"),
+            ("FLX_DELAY", "Extra construction delay (months)", 0, "int")]
     b.FLEX = {}
     for k, lab, v, fmt in flex:
-        r = se.scalar(k, lab, v, fmt=fmt, unit="x" if fmt == "pct" else "#", style="input", name=k)
+        r = se.scalar(k, lab, v, fmt=fmt, unit="x" if fmt == "pct" else "months", style="input", name=k)
         b.FLEX[k] = f"$D${r}"
+        b.DV.append(("52_Sensitivity", "dec", ("dec", 0, 5) if fmt == "pct" else ("dec", 0, 24), f"D{r}"))
+    se.scalar("FLXON", "Dials changed from neutral? (1 = yes – results are NOT the base case)",
+              "IF(AND(FLX_PRICE=1,FLX_COST=1,FLX_RENT=1,FLX_OCC=1,FLX_RATE=1,FLX_OPEX=1,FLX_DELAY=0),0,1)", fmt="int", unit="flag",
+              name="FLEX_ON", style="key")
     se.gap()
     se.sec("Live outputs", "ውጤቶች")
     outs = [("O_EIRR", "Equity IRR", "EIRR", "pct"), ("O_PIRR", "Project IRR", "PIRR", "pct"), ("O_PNPV", "Project NPV", "PNPV", "n0"),
@@ -368,254 +378,143 @@ def build_sens(b):
     for k, lab, f, fmt in outs:
         se.scalar(k, lab, f, fmt=fmt, unit="ETB" if fmt == "n0" else "", style="key")
     se.gap()
-    out_cells = {k: f"$D${se.scal[k]}" for k, *_ in outs}
-
-    def dt_block(title, inp, vals, cols, fmtv="pct", am=None, label_fmt=None):
-        """one-way data table: label row, formula row, then input values in col C and outputs in D.."""
-        se.sec(title, am)
-        rl = se.r
-        r0 = rl + 1
-        se.r += 2 + len(vals)
-
-        def _do(_r, r0=r0, rl=rl):
-            ws.cell(rl, 3, "Input value").font = font(9, True, SEC)
-            ws.cell(rl, 2, "Live Data Table – recalculates automatically (press F9 if Excel is set to 'except tables')").font = F_NOTE
-            for j, (lab, ref, fmt) in enumerate(cols):
-                lc = ws.cell(rl, 4 + j, lab)
-                lc.font = font(9, True, NAVY)
-                lc.alignment = Alignment(horizontal="right", wrap_text=True)
-                cc = ws.cell(r0, 4 + j, "=" + ref)
-                cc.number_format = NF[fmt]
-                cc.font = font(9, True, SEC)
-                cc.fill = fill("EEF1F5")
-            ws.cell(r0, 3, "base →").font = font(9, False, SEC)
-            for k, v in enumerate(vals):
-                cc = ws.cell(r0 + 1 + k, 3, v)
-                cc.number_format = NF[fmtv]
-                cc.font = F_BOLD
-                cc.alignment = Alignment(horizontal="center")
-            ref = f"D{r0 + 1}:{CL(3 + len(cols))}{r0 + len(vals)}"
-            ws[f"D{r0 + 1}"] = DataTableFormula(ref=ref, r1=inp.replace("$", ""))
-            b.DT_RANGES.append(("52_Sensitivity", ref))
-            for k in range(len(vals)):
-                for j, (_, _, fmt) in enumerate(cols):
-                    ws.cell(r0 + 1 + k, 4 + j).number_format = NF[fmt]
-        se.raw(_do)
-        return r0
-
-    b.DT_RANGES = []
-    oneway_cols = [("Equity IRR", out_cells["O_EIRR"], "pct"), ("Min DSCR", out_cells["O_DSCR"], "x"),
-                   ("Profit on cost", out_cells["O_POC"], "pct")]
-    steps = [0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3]
-    b.OW = {}
-    for k, lab in (("FLX_PRICE", "Sale price"), ("FLX_COST", "Construction cost"), ("FLX_OCC", "Occupancy"),
-                   ("FLX_RATE", "Interest rate"), ("FLX_RENT", "Rent")):
-        b.OW[k] = dt_block(f"One-way: {lab} (−30% … +30%)", b.FLEX[k], steps, oneway_cols)
-    b.OW["FLX_DELAY"] = dt_block("One-way: construction delay (months)", b.FLEX["FLX_DELAY"], [0, 3, 6, 9, 12, 18, 24],
-                                 oneway_cols, fmtv="int")
-    # two-way
-    se.sec("Two-way: Equity IRR – sale price (across) × construction cost (down)", "ሁለት-አቅጣጫ")
-    r2 = se.r
-    pv = [0.8, 0.9, 1.0, 1.1, 1.2]
-    cvv = [0.8, 0.9, 1.0, 1.1, 1.2]
-    se.r += 1 + len(cvv) + 1
-
-    def _two(_r):
-        c0 = ws.cell(r2, 3, "=" + out_cells["O_EIRR"])
-        c0.number_format = NF["pct"]
-        c0.font = font(9, True, NAVY)
-        ws.cell(r2, 2, "Corner = Equity IRR; price → across, cost ↓ down").font = F_NOTE
-        for j, v in enumerate(pv):
-            cc = ws.cell(r2, 4 + j, v)
-            cc.number_format = NF["pct"]
-            cc.font = F_BOLD
-        for k, v in enumerate(cvv):
-            cc = ws.cell(r2 + 1 + k, 3, v)
-            cc.number_format = NF["pct"]
-            cc.font = F_BOLD
-        ref = f"D{r2 + 1}:{CL(3 + len(pv))}{r2 + len(cvv)}"
-        ws[f"D{r2 + 1}"] = DataTableFormula(ref=ref, dt2D=True, r1=b.FLEX["FLX_PRICE"].replace("$", ""),
-                                            r2=b.FLEX["FLX_COST"].replace("$", ""))
-        b.DT_RANGES.append(("52_Sensitivity", ref))
-        for k in range(len(cvv)):
-            for j in range(len(pv)):
-                ws.cell(r2 + 1 + k, 4 + j).number_format = NF["pct"]
-        rng = f"D{r2 + 1}:{CL(3 + len(pv))}{r2 + len(cvv)}"
-        ws.conditional_formatting.add(rng, CellIsRule(operator="greaterThanOrEqual", formula=["HURDLE"], fill=fill(GOOD_BG)))
-        ws.conditional_formatting.add(rng, CellIsRule(operator="lessThan", formula=["HURDLE"], fill=fill(CRIT_BG)))
-    se.raw(_two)
-    # scenario grid (live, data table on the scenario override)
-    b.SGRID = dt_block("Scenario grid – all four scenarios side by side (live)", b.FLEX["SCEN_OVR"], [1, 2, 3, 4],
-                       [("Equity IRR", out_cells["O_EIRR"], "pct"), ("Project NPV (ETB m)", out_cells["O_PNPV"], "m"),
-                        ("Profit on cost", out_cells["O_POC"], "pct"), ("Min DSCR", out_cells["O_DSCR"], "x"),
-                        ("Peak debt (ETB m)", out_cells["O_PEAK"], "m")], fmtv="int")
-    se.note("Rows 1–4 = Base, Upside, Downside, Lender. Values recalculate automatically; in Excel set calculation to Automatic (not 'except tables') or press F9.")
-
-    # tornado
+    # ------------------------------------------------------------------ helpers (annual)
+    se.sec("Present values used by the tornado and break-evens (annual, @ project discount rate)", "ረዳት ስሌቶች")
+    rr_ = lambda sh, k, i: X(sh, k, i)
+    se.line("DF", "Discount factor @ project rate", lambda i: T("T_DF", i), fmt="n2", unit="x", tot=None, n=ANN_N)
+    se.line("SPCF", "Space rent less %-based costs", lambda i: f"{rr_('24_Revenue', 'RENT_SP', i)}*(1-OPEX_PCT*(OPEX_METHOD=1)-MGMT_PCT-BAD_DEBT)",
+            fmt="n0", unit="ETB", n=ANN_N)
+    se.line("HOTCF", "Hotel rent less %-based costs", lambda i: f"{rr_('24_Revenue', 'HOTEL', i)}*(1-MGMT_PCT-BAD_DEBT)",
+            fmt="n0", unit="ETB", n=ANN_N)
+    se.line("CAPX", "Construction cost driven by the cost dial",
+            lambda i: "+".join(SUMC(k, i) for k in ("HARD", "CONT", "DESIGN", "SUPERV", "CONSULT")), fmt="n0", unit="ETB", n=ANN_N)
+    se.line("OPXL", "Operating costs driven by the opex dial",
+            lambda i: "+".join(rr_("25_Opex", k, i) for k in ("INS", "MAINT", "OVH")) + f"+IF(OPEX_METHOD=2,{rr_('25_Opex', 'PROP', i)},0)",
+            fmt="n0", unit="ETB", n=ANN_N)
+    ln = b.sheets["27_Loan"].rows
+    se.line("INTR", "Loan interest (paid + capitalised)",
+            lambda i: f"'27_Loan'!{pc(i)}{ln['A_INTP']}+'27_Loan'!{pc(i)}{ln['A_CAPC']}+'27_Loan'!{pc(i)}{ln['A_CAPG']}", fmt="n0",
+            unit="ETB", n=ANN_N)
+    se.line("OPSIN", "Operating inflows (NOI + sales collections)",
+            lambda i: f"{rr_('24_Revenue', 'NOI', i)}+{rr_('24_Revenue', 'SALES_COLL', i)}", fmt="n0", unit="ETB", n=ANN_N)
+    sp = lambda k: f"$E${se.rows[k]}:$R${se.rows[k]}"
+    tvshare = lambda k: f"IF(NOI_O10>0,TV_PV*$R${se.rows[k]}/NOI_O10,0)"
+    se.scalar("TVPV", "PV of terminal value", f"TV_NET*$R${se.rows['DF']}", name="TV_PV")
+    ann = lambda sh, k: f"'{sh}'!$E${b.sheets[sh].rows[k]}:$R${b.sheets[sh].rows[k]}"
+    se.scalar("PVS", "PV of sales collections net of commission & marketing",
+              f"SUMPRODUCT({ann('24_Revenue', 'SALES_COLL')},{sp('DF')})*(1-COMM_PCT-MKT_PCT)", name="PV_SALESNET")
+    se.scalar("PVSP", "PV of space rent (incl. its share of terminal value)", f"SUMPRODUCT({sp('SPCF')},{sp('DF')})+{tvshare('SPCF')}",
+              name="PV_SPRENT")
+    se.scalar("PVH", "PV of hotel rent (incl. its share of terminal value)", f"SUMPRODUCT({sp('HOTCF')},{sp('DF')})+{tvshare('HOTCF')}",
+              name="PV_HOTRENT")
+    se.scalar("PVC", "PV of construction cost (cost dial)", f"SUMPRODUCT({sp('CAPX')},{sp('DF')})", name="PV_CAPX")
+    se.scalar("PVO", "PV of operating costs (opex dial, incl. terminal value effect)",
+              f"SUMPRODUCT({sp('OPXL')},{sp('DF')})+{tvshare('OPXL')}", name="PV_OPX")
+    se.scalar("PVI", "PV of loan interest", f"SUMPRODUCT({sp('INTR')},{sp('DF')})", name="PV_INTR")
+    se.scalar("PVIN", "PV of operating inflows incl. terminal value", f"SUMPRODUCT({sp('OPSIN')},{sp('DF')})+TV_PV", name="PV_OPSIN")
+    se.scalar("DLY", "Value lost from a 6-month delay (first-order)",
+              "PV_OPSIN*(1-(1+DISC_EFF)^(-0.5))+PV_CAPX*0.5*((1+ESC_EFF)^0.5-1)", name="DELAY6_PV")
     se.gap()
-    se.sec("Tornado – Equity IRR swing for ±20% (delay: +6 months)", "የቶርኔዶ ሰንጠረዥ")
+    # ------------------------------------------------------------------ tornado
+    se.sec("Tornado – first-order change in project value for ±20% (delay: +6 months), ETB million", "የቶርኔዶ ሰንጠረዥ")
+    se.note("Pre-tax estimate from the present values above. For the exact effect of any driver, change the matching dial at the top.")
     tr0 = se.r
-    drivers = [("Sale price", "FLX_PRICE", 1, 5), ("Construction cost", "FLX_COST", 1, 5), ("Occupancy", "FLX_OCC", 1, 5),
-               ("Interest rate", "FLX_RATE", 1, 5), ("Rent", "FLX_RENT", 1, 5), ("Delay", "FLX_DELAY", 0, 2)]
-    se.r += 1 + len(drivers) + 2 + len(drivers)
+    drivers = [("Sale price", "0.2*PV_SALESNET", "-0.2*PV_SALESNET"),
+               ("Rent – spaces", "0.2*PV_SPRENT", "-0.2*PV_SPRENT"),
+               ("Hotel trading (rate × occupancy)", "0.2*PV_HOTRENT", "-0.2*PV_HOTRENT"),
+               ("Construction cost", "-0.2*PV_CAPX", "0.2*PV_CAPX"),
+               ("Operating costs", "-0.2*PV_OPX", "0.2*PV_OPX"),
+               ("Interest rate (value to owner)", "-0.2*PV_INTR", "0.2*PV_INTR"),
+               ("Construction delay +6 months", "-DELAY6_PV", "0")]
+    se.r += 1 + len(drivers) + 2 + len(drivers) + 1
     b.TORNADO = {}
 
     def _torn(_r):
-        heads = ["Driver", "Low case", "High case", "Δ low", "Δ high", "Swing", "Rank key"]
-        for j, h in enumerate(heads):
-            ws.cell(tr0, 2 + j, h).font = font(9, True, NAVY)
-        base = out_cells["O_EIRR"]
-        for k, (lab, key, lo, hi) in enumerate(drivers):
+        for j, h in enumerate(["Driver", "", "", "Adverse case", "Favourable case", "Swing", "Rank key"]):
+            if h:
+                ws.cell(tr0, 2 + j, h).font = font(9, True, NAVY)
+        for k, (lab, hi, lo) in enumerate(drivers):
             rr = tr0 + 1 + k
-            r0 = b.OW[key]
             ws.cell(rr, 2, lab).font = F_BODY
-            for col, f in ((3, f"D{r0 + 1 + lo}"), (4, f"D{r0 + 1 + hi}"), (5, f"C{rr}-{base}"), (6, f"D{rr}-{base}"),
-                           (7, f"ABS(F{rr}-E{rr})"), (8, f"G{rr}+{k + 1}/1000000")):
+            for col, f in ((5, f"MIN({hi},{lo})/1000000"), (6, f"MAX({hi},{lo})/1000000"), (7, f"F{rr}-E{rr}"),
+                           (8, f"G{rr}+{k + 1}/1000000")):
                 cc = ws.cell(rr, col, "=" + f)
-                cc.number_format = NF["pct"] if col < 8 else NF["n2"]
+                cc.number_format = NF["n1"] if col < 8 else NF["n2"]
                 cc.font = F_BODY
-        # sorted
         s0 = tr0 + 1 + len(drivers) + 1
         ws.cell(s0, 2, "Sorted (largest swing first) – chart source").font = font(9, True, NAVY)
         keyr = f"$H${tr0 + 1}:$H${tr0 + len(drivers)}"
         for k in range(len(drivers)):
             rr = s0 + 1 + k
-            m = f"MATCH(LARGE({keyr},{k + 1}),{keyr},0)"
-            ws.cell(rr, 2, f"=INDEX($B${tr0 + 1}:$B${tr0 + len(drivers)},{m})").font = F_BODY
+            mt = f"MATCH(LARGE({keyr},{k + 1}),{keyr},0)"
+            ws.cell(rr, 2, f"=INDEX($B${tr0 + 1}:$B${tr0 + len(drivers)},{mt})").font = F_BODY
             for col, srccol in ((5, "E"), (6, "F")):
-                cc = ws.cell(rr, col, f"=INDEX(${srccol}${tr0 + 1}:${srccol}${tr0 + len(drivers)},{m})")
-                cc.number_format = NF["pct"]
-            ws.cell(rr, 3, "Δ vs base").font = F_NOTE
+                cc = ws.cell(rr, col, f"=INDEX(${srccol}${tr0 + 1}:${srccol}${tr0 + len(drivers)},{mt})")
+                cc.number_format = NF["n1"]
+        b.name("TOP_RISK", f"'52_Sensitivity'!$B${s0 + 1}")
         b.TORNADO = {"s0": s0, "n": len(drivers)}
     se.raw(_torn)
-
-    # break-even
-    se.gap()
-    se.sec("Break-even analysis (live)", "የሚዛን ነጥብ ትንተና")
-    se.note("Closed-form = first-order estimate holding other drivers constant. Grid-refined = 21-row live search table "
-            "(Data Table) with linear interpolation – no goal seek, no macro.")
+    # ------------------------------------------------------------------ break-even
+    se.sec("Break-even analysis (live, closed-form – each holds the other drivers at their inputs)", "የሚዛን ነጥብ ትንተና")
     be0 = se.r
-    be_defs = [
-        ("BE_PRICE_NPV", "Break-even sale price (project NPV = 0)", "FLX_PRICE", [round(0.1 * k, 2) for k in range(0, 21)],
-         out_cells["O_PNPV"], "0", "ETB/m²", "BLEND_PRICE"),
-        ("BE_PRICE_POC", "Break-even sale price (profit on cost = 0)", "FLX_PRICE", [round(0.1 * k, 2) for k in range(0, 21)],
-         out_cells["O_POC"], "0", "ETB/m²", "BLEND_PRICE"),
-        ("BE_OCC", "Break-even occupancy (min DSCR = covenant)", "FLX_OCC", [round(0.05 * k, 2) for k in range(0, 21)],
-         out_cells["O_DSCR"], "DSCR_COV", "% occ.", "OCC_STAB"),
-        ("BE_COST", "Max cost overrun before Equity IRR < hurdle", "FLX_COST", [round(1 + 0.1 * k, 2) for k in range(0, 21)],
-         out_cells["O_EIRR"], "HURDLE", "overrun", "1"),
-        ("BE_RATE", "Break-even interest rate (min DSCR = covenant)", "FLX_RATE", [round(0.5 + 0.15 * k, 2) for k in range(0, 21)],
-         out_cells["O_DSCR"], "DSCR_COV", "% p.a.", "RATE_EFF"),
-        ("BE_DELAY", "Max delay before Equity IRR < hurdle", "FLX_DELAY", [2 * k for k in range(0, 21)],
-         out_cells["O_EIRR"], "HURDLE", "months", "1"),
-    ]
-    # summary table rows
-    se.r += 1 + len(be_defs) + 1
-    grid0 = se.r
-    se.r += (len(be_defs) // 3 + 1) * 25
-    b.BE = {}
+    be = [("BE_PRICE_NPV", "Sale price at which project NPV = 0", "IF(PV_SALESNET>0,BLEND_PRICE*(1-PNPV/PV_SALESNET),0)",
+           "n0", "ETB/m²", "BLEND_PRICE", "IF(AND(BLEND_PRICE>0,E{r}>0),1-E{r}/BLEND_PRICE,0)"),
+          ("BE_PRICE_POC", "Sale price at which profit on cost = 0", "IF(SALES_NOM>0,BLEND_PRICE*(TDC-RET_VALUE)/SALES_NOM,0)",
+           "n0", "ETB/m²", "BLEND_PRICE", "IF(AND(BLEND_PRICE>0,E{r}>0),1-E{r}/BLEND_PRICE,0)"),
+          ("BE_RENT_NPV", "Rent level at which project NPV = 0 (% of today's input)",
+           "IF(PV_SPRENT+PV_HOTRENT>0,1-PNPV/(PV_SPRENT+PV_HOTRENT),0)", "pct", "% of rent", "1", "IF(E{r}>0,1-E{r},0)"),
+          ("BE_OCC", "Stabilised occupancy at which min DSCR = covenant", "OCC_STAB*BE_OCC_MULT", "pct", "% occ.", "OCC_STAB",
+           "IF(G{r}>0,1-E{r}/G{r},0)"),
+          ("BE_COST", "Cost overrun before equity IRR falls below the hurdle", "IF(PV_HARD_H>0,ENPV_H/PV_HARD_H,0)", "pct",
+           "overrun", "0", "E{r}"),
+          ("BE_RATE", "Interest rate at which min DSCR = covenant", "BE_RATE_CF", "pct2", "% p.a.", "RATE_EFF",
+           "IF(AND(G{r}>0,E{r}>0),E{r}/G{r}-1,0)"),
+          ("BE_DELAY", "Delay before equity IRR falls below the hurdle",
+           "IF(AND(PV_EIN_H>0,PV_EOUT_H>0),12*LN(PV_EIN_H/PV_EOUT_H)/LN(1+HURDLE),0)", "n1", "months", "0", "E{r}/12"),
+          ("BE_CAP", "Exit cap rate at which project NPV = 0",
+           f"IF(AND(TV_PV>0,TV_PV-PNPV>0),EXIT_CAP_EFF*TV_PV/(TV_PV-PNPV),0)", "pct2", "% yield", "EXIT_CAP_EFF",
+           "IF(G{r}>0,E{r}/G{r}-1,0)")]
+    se.r += 1 + len(be) + 2
 
     def _be(_r):
-        heads = ["Break-even", "", "Closed-form", "Grid-refined", "Unit", "Current", "Status"]
-        for j, h in enumerate(heads):
+        for j, h in enumerate(["Break-even", "", "", "Value", "Unit", "Current", "Headroom"]):
             if h:
                 ws.cell(be0, 2 + j, h).font = font(9, True, NAVY)
-        # grids side by side (3 per band, each 3 columns wide)
-        for k, (key, lab, flex, vals, out, target, unit, scale) in enumerate(be_defs):
-            band, pos = divmod(k, 3)
-            gr = grid0 + band * 25
-            gc = 2 + pos * 4      # B, F, J
-            ws.cell(gr, gc, lab).font = font(9, True, NAVY)
-            ws.cell(gr + 1, gc, "Flex").font = font(9, True, SEC)
-            oc = ws.cell(gr + 1, gc + 1, "=" + out)
-            oc.font = font(9, True, NAVY)
-            oc.number_format = NF["m"] if key == "BE_PRICE_NPV" else NF["n2"]
-            ws.cell(gr + 1, gc + 2, "Sign change").font = font(9, True, SEC)
-            for j, v in enumerate(vals):
-                cc = ws.cell(gr + 2 + j, gc, v)
-                cc.number_format = NF["n2"]
-                cc.font = F_BOLD
-            ref = f"{CL(gc + 1)}{gr + 2}:{CL(gc + 1)}{gr + 22}"
-            ws[f"{CL(gc + 1)}{gr + 2}"] = DataTableFormula(ref=ref, r1=b.FLEX[flex].replace("$", ""))
-            b.DT_RANGES.append(("52_Sensitivity", ref))
-            for j in range(21):
-                ws.cell(gr + 2 + j, gc + 1).number_format = NF["m"] if key == "BE_PRICE_NPV" else NF["n2"]
-                if j > 0:
-                    a1, a0 = f"{CL(gc + 1)}{gr + 2 + j}", f"{CL(gc + 1)}{gr + 1 + j}"
-                    ws.cell(gr + 2 + j, gc + 2, f"=IF(({a0}-{target})*({a1}-{target})<=0,IF({a1}<>{a0},1,0),0)").number_format = NF["int"]
-            # interpolate at first sign change
-            sc_rng = f"${CL(gc + 2)}${gr + 3}:${CL(gc + 2)}${gr + 22}"
-            first = f"MATCH(1,{sc_rng},0)"
-            x0 = f"INDEX(${CL(gc)}${gr + 2}:${CL(gc)}${gr + 22},{first})"
-            x1 = f"INDEX(${CL(gc)}${gr + 3}:${CL(gc)}${gr + 22},{first})"
-            y0 = f"INDEX(${CL(gc + 1)}${gr + 2}:${CL(gc + 1)}${gr + 22},{first})"
-            y1 = f"INDEX(${CL(gc + 1)}${gr + 3}:${CL(gc + 1)}${gr + 22},{first})"
-            interp = f"IF(SUM({sc_rng})=0,-1,{x0}+({target}-{y0})*({x1}-{x0})/({y1}-{y0}))"
-            ws.cell(gr + 23, gc, "Flex at target").font = font(9, True, SEC)
-            ic = ws.cell(gr + 23, gc + 1, "=" + interp)
-            ic.number_format = NF["n2"]
-            ic.fill = FILL_KEY
-            b.BE[key] = (f"{CL(gc + 1)}{gr + 23}", scale)
-        # summary rows
-        closed = {
-            "BE_PRICE_NPV": "IF(PV_SALESNET>0,BLEND_PRICE*(1-PNPV/PV_SALESNET),0)",
-            "BE_PRICE_POC": "IF(SALES_NOM>0,BLEND_PRICE*(TDC-RET_VALUE)/SALES_NOM,0)",
-            "BE_OCC": "OCC_STAB*BE_OCC_MULT",
-            "BE_COST": "IF(PV_HARD_H>0,ENPV_H/PV_HARD_H,0)",
-            "BE_RATE": "BE_RATE_CF",
-            "BE_DELAY": "IF(AND(PV_EIN_H>0,PV_EOUT_H>0),12*LN(PV_EIN_H/PV_EOUT_H)/LN(1+HURDLE),0)",
-        }
-        units = {"BE_PRICE_NPV": "n0", "BE_PRICE_POC": "n0", "BE_OCC": "pct", "BE_COST": "pct", "BE_RATE": "pct2", "BE_DELAY": "n1"}
-        cur = {"BE_PRICE_NPV": "BLEND_PRICE", "BE_PRICE_POC": "BLEND_PRICE", "BE_OCC": "OCC_STAB", "BE_COST": "0",
-               "BE_RATE": "RATE_EFF", "BE_DELAY": "0"}
-        for k, (key, lab, flex, vals, out, target, unit, scale) in enumerate(be_defs):
+        for k, (key, lab, f, fmt, unit, cur, head) in enumerate(be):
             rr = be0 + 1 + k
             ws.cell(rr, 2, lab).font = F_BODY
-            c1 = ws.cell(rr, 4, "=" + closed[key])
-            c1.number_format = NF[units[key]]
-            cellref, sc = b.BE[key]
-            if key == "BE_COST":
-                gref = f"IF({cellref}<0,-1,{cellref}-1)"
-            elif key == "BE_DELAY":
-                gref = f"{cellref}"
-            else:
-                gref = f"IF({cellref}<0,-1,{cellref}*{sc})"
-            c2 = ws.cell(rr, 5, "=" + gref)
-            c2.number_format = NF[units[key]]
-            c2.fill = FILL_KEY
-            c2.font = F_BOLD
+            c1 = ws.cell(rr, 5, "=" + f)
+            c1.number_format = NF[fmt]
+            c1.fill = FILL_KEY
+            c1.font = F_BOLD
             ws.cell(rr, 6, unit).font = F_UNIT
-            c3 = ws.cell(rr, 7, "=" + cur[key])
-            c3.number_format = NF[units[key]]
-            ws.cell(rr, 8, f'=IF(E{rr}<0,"outside tested range","")').font = F_NOTE
+            c3 = ws.cell(rr, 7, "=" + cur)
+            c3.number_format = NF[fmt]
+            c4 = ws.cell(rr, 8, "=" + head.format(r=rr))
+            c4.number_format = NF["pct"] if key != "BE_DELAY" else NF["yr"]
             b.name(key, f"'52_Sensitivity'!$E${rr}")
-        ws.cell(be0 + 1 + len(be_defs), 2,
-                "−1 / 'outside tested range' = the target is not crossed inside the grid (e.g. DSCR covenant never binds).").font = F_NOTE
+        ws.cell(be0 + 1 + len(be), 2, "0 = not applicable for this project (e.g. no sales, no debt service). Headroom = how far the "
+                                        "input can move before the break-even is reached.").font = F_NOTE
+        ws.column_dimensions["E"].width = 14
+        ws.column_dimensions["F"].width = 14
+        ws.column_dimensions["G"].width = 14
+        ws.column_dimensions["H"].width = 12
     se.raw(_be)
-    # closed-form helpers
     se.gap()
-    se.sec("Closed-form helpers", "ረዳት ስሌቶች")
+    se.sec("Closed-form helpers for break-evens", "ረዳት ስሌቶች")
     RVr = b.sheets["24_Revenue"].rows
     rt = b.sheets["50_Returns"].rows
     ra = b.sheets["43_Ratios"].rows
-    ln = b.sheets["27_Loan"].rows
-    ann = lambda sh, k: f"'{sh}'!$E${b.sheets[sh].rows[k]}:$R${b.sheets[sh].rows[k]}"
-    se.scalar("PVS", "PV of sales collections net of commission & marketing",
-              f"SUMPRODUCT({ann('24_Revenue', 'SALES_COLL')},{ann('20_Timeline', 'T_DF')})*(1-COMM_PCT-MKT_PCT)", name="PV_SALESNET")
-    se.scalar("DFH", "Helper: discount factors at hurdle are computed per period below", 0, fmt="int", unit="")
     se.line("DFH_ROW", "Discount factor @ hurdle", lambda i: f"(1+HURDLE)^(-'20_Timeline'!{pc(i)}{b.TL['T_YF']})", fmt="n2",
             unit="x", tot=None, n=ANN_N)
     dfh = f"$E${se.rows['DFH_ROW']}:$R${se.rows['DFH_ROW']}"
     se.scalar("ENPVH", "Equity NPV @ hurdle", f"SUMPRODUCT({ann('50_Returns', 'ECF')},{dfh})", name="ENPV_H")
-    se.line("HARDP", "Hard cost + contingency by period", lambda i: f"SUMIFS('23_Construction'!$E${b.sheets['23_Construction'].rows['HARD']}:${pc(MON_C)}${b.sheets['23_Construction'].rows['HARD']},'23_Construction'!$E${b.sheets['23_Construction'].rows['PIDX']}:${pc(MON_C)}${b.sheets['23_Construction'].rows['PIDX']},'20_Timeline'!{pc(i)}{b.TL['T_P']})*(1+CONT_PCT)",
-            fmt="n0", unit="ETB", n=ANN_N)
-    se.scalar("PVH", "PV @ hurdle of hard cost + contingency", f"SUMPRODUCT($E${se.rows['HARDP']}:$R${se.rows['HARDP']},{dfh})",
-              name="PV_HARD_H")
+    se.scalar("PVHH", "PV @ hurdle of construction cost (cost dial)", f"SUMPRODUCT({sp('CAPX')},{dfh})", name="PV_HARD_H")
     se.line("EIN", "Equity inflows (positive)", lambda i: f"MAX(0,'50_Returns'!{pc(i)}{rt['ECF']})", fmt="n0", unit="ETB", n=ANN_N)
-    se.scalar("PVI", "PV @ hurdle of equity inflows", f"SUMPRODUCT($E${se.rows['EIN']}:$R${se.rows['EIN']},{dfh})", name="PV_EIN_H")
-    se.scalar("PVO", "PV @ hurdle of equity outflows", "PV_EIN_H-ENPV_H", name="PV_EOUT_H")
-    se.line("RENTCF", "Rent-driven cash (rent × (1 − opex % − mgmt % − bad debt %))",
-            lambda i: f"'24_Revenue'!{pc(i)}{RVr['RENT']}*(1-OPEX_PCT*(OPEX_METHOD=1)-MGMT_PCT-BAD_DEBT)", fmt="n0", unit="ETB", n=ANN_N)
+    se.scalar("PVEI", "PV @ hurdle of equity inflows", f"SUMPRODUCT($E${se.rows['EIN']}:$R${se.rows['EIN']},{dfh})", name="PV_EIN_H")
+    se.scalar("PVEO", "PV @ hurdle of equity outflows", "PV_EIN_H-ENPV_H", name="PV_EOUT_H")
+    se.line("RENTCF", "Rent-driven cash (spaces + hotel, after %-based costs)",
+            lambda i: f"{pc(i)}{se.rows['SPCF']}+{pc(i)}{se.rows['HOTCF']}", fmt="n0", unit="ETB", n=ANN_N)
     se.line("OCCM", "Occupancy multiplier needed for DSCR = covenant",
             lambda i: (0 if i <= 4 else
                        f"IF(AND('43_Ratios'!{pc(i)}{ra['DS']}>0,{pc(i)}{se.rows['RENTCF']}>0),(DSCR_COV*'43_Ratios'!{pc(i)}{ra['DS']}-'43_Ratios'!{pc(i)}{ra['CFADS']}+{pc(i)}{se.rows['RENTCF']})/{pc(i)}{se.rows['RENTCF']},0)"),
@@ -641,7 +540,7 @@ def build_checks(b):
     bsr = b.sheets["41_BS"].rows
     cfr = b.sheets["42_CF"].rows
     ann = lambda sh, k: f"'{sh}'!$E${b.sheets[sh].rows[k]}:$R${b.sheets[sh].rows[k]}"
-    scan_sheets = ["10_Inputs", "11_Scenarios", "12_TaxLaw", "20_Timeline", "21_Area", "22_Capex", "23_Construction",
+    scan_sheets = ["10_Inputs", "11_Scenarios", "12_TaxLaw", "13_Spaces", "20_Timeline", "21_Area", "22_Capex", "23_Construction",
                    "24_Revenue", "25_Opex", "26_Assets", "27_Loan", "28_Tax", "29_VAT", "30_WorkingCap", "40_PL", "41_BS",
                    "42_CF", "43_Ratios", "50_Returns", "51_Payback", "52_Sensitivity"]
     def scan():
@@ -656,7 +555,7 @@ def build_checks(b):
         ("C02", "Cash-flow closing cash = balance-sheet cash", f"SUMPRODUCT(ABS({ann('42_CF', 'CLOSE')}-{ann('41_BS', 'CASH')}))", 1, "E"),
         ("C03", "Sources = uses (monthly funding waterfall)", "ABS(SRC_DIFF)", 1, "E"),
         ("C04", "TDC = monthly capex accrual; cost categories sum to TDC", "ABS(TDC_DIFF)+ABS(CAT_TOT-TDC)", 1, "E"),
-        ("C05", "Capex fully allocated across IAS 2 / 40 / 16", "ABS(ALLOC_DIFF)+ABS(SHARE_SUM-1)*1000", 1, "E"),
+        ("C05", "Capex fully allocated across IAS 2 / 40 / 16", "ABS(ALLOC_DIFF)+ABS(SHARE_SUM-1)*1000*IF(NET_AREA>0,1,0)", 1, "E"),
         ("C06", "Loan fully repaid within tenor", "ABS(LN_BAL_TENOR)", 1, "E"),
         ("C07", "Σ principal repaid = debt drawn + capitalised interest", "ABS(LN_PRIN_TOT-LN_DRAWS-LN_CAPINT)", 1, "E"),
         ("C08", "Inventory fully released by final sale (end O10)", lambda: f"ABS('26_Assets'!$R${b.sheets['26_Assets'].rows['INV']})", 1, "E"),
@@ -664,20 +563,22 @@ def build_checks(b):
          lambda: f"ABS('24_Revenue'!$R${b.sheets['24_Revenue'].rows['CBAL']})", 1, "E"),
         ("C10", "Land not depreciated (cum. depreciation ≤ depreciable base)",
          lambda: f"MAX(0,'26_Assets'!$R${b.sheets['26_Assets'].rows['DEPC']}-(BASE_STR+BASE_SYS+BASE_FFE))", 1, "E"),
-        ("C11", "Areas reconcile (floors = uses)", "ABS(AREA_DIFF)", 0.5, "E"),
+        ("C11", "Net area of the spaces ≤ gross floor area", "ABS(AREA_DIFF)", 0.5, "E"),
         ("C12", "Tax losses never negative", lambda: f"'28_Tax'!$D${b.sheets['28_Tax'].rows['LNEG']}", 0.5, "E"),
-        ("C13", "Scenario, mode, data set and units switches valid",
-         "IF(AND(SCEN>=1,SCEN<=4,PROJECT_MODE>=0,PROJECT_MODE<=3,DATA_SET>=1,DATA_SET<=3,UNIT_SEL>=1,UNIT_SEL<=3),0,1)", 0.5, "E"),
+        ("C13", "Track, project type, data set and scenario switches valid",
+         "IF(AND(TRACK>=1,TRACK<=2,SCEN>=1,SCEN<=4,PROJECT_MODE>=1,PROJECT_MODE<=3,DATA_SET>=1,DATA_SET<=3),0,1)", 0.5, "E"),
         ("C14", "No formula errors anywhere (REF, DIV/0, N/A, VALUE – ISERROR scan)", scan, 0.5, "E"),
         ("C15", "Payment plan and presales ≤ 100%", "MAX(0,PAY_DP+PAY_INST-1)+MAX(0,PRESALE_1+PRESALE_2+PRESALE_3+PRESALE_4-1)", 0.0001, "E"),
-        ("C16", "Home Estimate total = capex total used by commercial modes", "ABS(HOME_TOTAL-TDC)", 1, "E"),
-        ("C17", "VAT account rolls forward", lambda: f"ABS('29_VAT'!$D${b.sheets['29_VAT'].rows['CHK']})", 1, "E"),
-        ("C18", "DSCR ≥ covenant in every repayment year (commercial modes)", "IF(PROJECT_MODE=0,0,N_BREACH)", 0.5, "W"),
-        ("C19", "Cash never below minimum in operating years (commercial modes)", "IF(PROJECT_MODE=0,0,N_LOWCASH)", 0.5, "W"),
+        ("C16", "VAT account rolls forward", lambda: f"ABS('29_VAT'!$D${b.sheets['29_VAT'].rows['CHK']})", 1, "E"),
+        ("C17", "What-if dials at neutral (100% / 0) – otherwise results are not the base case", "FLEX_ON", 0.5, "W"),
+        ("C18", "DSCR ≥ covenant in every repayment year", "N_BREACH", 0.5, "W"),
+        ("C19", "Cash never below minimum in operating years", "N_LOWCASH", 0.5, "W"),
         ("C20", "Funding gap = 0 (equity + debt + presales cover the cost)", "FUND_GAP", 1, "W"),
         ("C21", "FAR within permitted limit", "IF(AND(FAR>0,FAR_ACT>FAR),1,0)", 0.5, "W"),
-        ("C22", "Building type matches the floors entered", "IF(GFA=0,0,1-BTYPE_OK)", 0.5, "W"),
-        ("C23", "No IAS 36 impairment indicator (commercial modes)", "IF(PROJECT_MODE=0,0,N_IMPAIR)", 0.5, "W"),
+        ("C22", "Net-to-gross ratio plausible (50%–95%)", "IF(OR(GFA=0,NET_AREA=0),0,IF(AND(NTG>=0.5,NTG<=0.95),0,1))", 0.5, "W"),
+        ("C23", "Hotel inputs consistent (hotel space ⇔ keys and room rate)", "HOTEL_INCONS", 0.5, "W"),
+        ("C24", "At least one space entered on sheet 13", "IF(N_SPACES_USED>0,0,1)", 0.5, "W"),
+        ("C25", "No IAS 36 impairment indicator", "N_IMPAIR", 0.5, "W"),
     ]
     b.CHECK_ROWS = []
 
@@ -719,7 +620,8 @@ def build_checks(b):
         c.font = F_BOLD
         b.name("CHK_STATUS", f"'60_Checks'!$D${s + 5}")
         ws.cell(s + 7, 2, "How to fix common failures: C01/C02 – never type over black formula cells; C06 – increase tenor or "
-                          "reduce grace; C15 – payment plan or presales above 100%; C16 – recalculate (F9).").font = F_NOTE
+                          "reduce grace; C11 – net areas on sheet 13 exceed the floors on Inputs block 2; C15 – payment plan or "
+                          "presales above 100%; C17 – set the dials on sheet 52 back to 100% / 0.").font = F_NOTE
         ws.column_dimensions["C"].width = 10
         ws.column_dimensions["D"].width = 16
         ws.column_dimensions["E"].width = 11

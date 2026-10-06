@@ -17,8 +17,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 from inputs_def import LISTS  # noqa: E402
 
-MODE = {m: LISTS["L_MODE"][m] for m in range(4)}
+MODE = {m: LISTS["L_MODE"][m - 1] for m in (1, 2, 3)}
 DATA = {d: LISTS["L_DATASET"][d - 1] for d in (1, 2, 3)}
+PDATA = {d: LISTS["L_PDATASET"][d - 1] for d in (1, 2)}
+TRACK = {t: LISTS["L_TRACK"][t - 1] for t in (1, 2)}
 SCEN = {s: LISTS["L_SCEN"][s - 1] for s in (1, 2, 3, 4)}
 
 
@@ -30,16 +32,23 @@ def input_cell(wb, name, col="E"):
 
 
 def make_variant(src, out, mode=None, data=None, scen=None, inputs=None, flex=None, strip_dt=True, col=None, cells=None,
-                 paste=None):
+                 paste=None, track=None, pdata=None):
     wb = load_workbook(src)
     st = wb["00_Start"]
+    if track is not None:
+        st["D9"] = TRACK[track]
+    if pdata is not None:
+        st["D15"] = PDATA[pdata]
     if mode is not None:
-        st["D10"] = MODE[mode]
+        st["I15"] = MODE[mode]
     if data is not None:
-        st["D12"] = DATA[data]
+        st["I17"] = DATA[data]
     if scen is not None:
-        st["D14"] = SCEN[scen]
-    dcol = col or {1: "E", 2: "F", 3: "G"}.get(data or 3, "G")
+        st["I19"] = SCEN[scen]
+    if pdata is not None and data is None:
+        dcol = col or {1: "E", 2: "F"}[pdata]
+    else:
+        dcol = col or {1: "E", 2: "F", 3: "G"}.get(data or 2, "F")
     for k, v in (inputs or {}).items():
         sh, c = input_cell(wb, k, dcol)
         wb[sh][c] = v

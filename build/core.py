@@ -306,6 +306,17 @@ class Builder:
             self.wb.defined_names[nm] = DefinedName(nm, attr_text=ref)
 
 
+# ------------------------------------------------------------------ links
+def link(ws, r, c, sheet, text, fnt=None, align="right"):
+    """Write a static internal hyperlink to cell (r, c) that jumps to sheet!A1."""
+    from openpyxl.worksheet.hyperlink import Hyperlink
+    cell = ws.cell(r, c, text)
+    cell.hyperlink = Hyperlink(ref=cell.coordinate, location=f"'{sheet}'!A1", display=text)
+    cell.font = fnt or font(10, False, BLUE, underline="single")
+    cell.alignment = Alignment(horizontal=align, vertical="center")
+    return cell
+
+
 # ------------------------------------------------------------------ header
 def header(b, sh, ncols_vis=None, start_link=True, period_hdr=True):
     ws = sh.ws
@@ -326,17 +337,20 @@ def header(b, sh, ncols_vis=None, start_link=True, period_hdr=True):
     t.alignment = Alignment(vertical="center")
     a = ws.cell(2, 2, sh.am)
     a.font = font(13, False, "F3D7AE", name=AMFONT)
-    p = ws.cell(3, 2, '=PROJ_NAME&"   |   Scenario: "&SCEN_NAME&"   |   Mode: "&MODE_NAME')
+    private = sh.name.startswith("P") and sh.name[1].isdigit()
+    if sh.name == "00_Start":
+        p = ws.cell(3, 2, "A · Private residence   |   B · Commercial project   |   Excel · LibreOffice · Google Sheets")
+    elif private:
+        p = ws.cell(3, 2, '=P_NAME&"   |   Private residence – cost estimate & home loan"')
+    else:
+        p = ws.cell(3, 2, '=PROJ_NAME&"   |   Type: "&MODE_NAME&"   |   Scenario: "&SCEN_NAME')
     p.font = font(9, False, "D6DEE8")
-    if start_link:
-        lc = ws.cell(1, last, '=HYPERLINK("#\'00_Start\'!A1","◂ Start")')
-        lc.font = font(10, True, "FFFFFF", underline="single")
-        lc.alignment = Alignment(horizontal="right", vertical="center")
-    if sh.banner:
-        bc = ws.cell(5, 2, '=IF(PROJECT_MODE=0,"Not needed for personal projects — switch mode to Commercial (1–3) on the Start sheet to see profitability.  ·  ለግል ፕሮጀክት አያስፈልግም — ትርፋማነትን ለማየት በመጀመሪያ ገጽ ላይ ዓይነቱን ወደ ንግድ (1–3) ይቀይሩ።","")')
-        bc.font = font(10, True, CRIT_FG)
-        rng = f"B5:{CL(last)}5"
-        ws.conditional_formatting.add(rng, FormulaRule(formula=["PROJECT_MODE=0"], fill=fill(CRIT_BG)))
+    if start_link and sh.name != "00_Start":
+        # static internal hyperlinks (work in Excel, LibreOffice and Google Sheets – no HYPERLINK() formula)
+        link(ws, 1, last, "00_Start", "◂ Start", font(10, True, "FFFFFF", underline="single"))
+        if sh.name not in ("00_Start", "01_Dashboard", "P3_Estimate"):
+            tgt, lab = ("P3_Estimate", "Estimate ▸") if private else ("01_Dashboard", "Dashboard ▸")
+            link(ws, 2, last, tgt, lab, font(9, False, "F3D7AE", underline="single"))
     # column widths
     ws.column_dimensions["A"].width = 2
     ws.column_dimensions["B"].width = sh.width_label

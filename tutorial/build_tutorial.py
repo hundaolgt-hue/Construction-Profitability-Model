@@ -1,71 +1,25 @@
-"""Build the Amharic tutorial (HTML -> PDF via Chromium).
+"""Build the Amharic tutorial v2 (HTML -> PDF via Chromium).
 
-usage: python build_tutorial.py  (expects ../output/*.xlsx and img/ screenshots)
+Two paths – A: private residence (P1–P4) · B: commercial project (01–61) – plus Google Sheets use.
+usage: python build_tutorial.py   (expects the finalized workbooks in /tmp or ../output and screenshots in img2/)
 """
-import json
 import os
 import re
 import subprocess
 import sys
 
 import pdfplumber
+from PIL import Image
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "build"))
-from facts import grab, etb, m, pct, A_NAMES, B_NAMES  # noqa: E402
+from facts import grab, etb, m, pct, C_NAMES, P_NAMES  # noqa: E402
 from glossary import GLOSSARY  # noqa: E402
 
 OUT = os.path.join(HERE, "..", "output")
-IMG = os.path.join(HERE, "img")
-
-
-def find_row(ws, label, after=1, col=2):
-    for r in range(after, ws.max_row + 1):
-        v = ws.cell(r, col).value
-        if isinstance(v, str) and v.startswith(label):
-            return r
-    raise KeyError(label)
-
-
-def load_facts():
-    A, _ = grab(f"{OUT}/sampleA_fast.xlsx", A_NAMES)
-    Ap, _ = grab(f"{OUT}/sampleA_premium.xlsx", A_NAMES)
-    Ar, wbr = grab(f"{OUT}/sampleA_rent.xlsx", A_NAMES)
-    B, wb = grab(f"{OUT}/Rapha_Development_Profitability_Model_v1.xlsx", B_NAMES)
-    # rent-out facts
-    ws = wbr["02_Home"]
-    r = find_row(ws, "Rent income, first year")
-    Ar["RENT1"] = ws.cell(r, 3).value
-    Ar["YIELD"] = ws.cell(r + 1, 3).value
-    Ar["PAYBACK"] = ws.cell(r + 2, 3).value
-    Ar["COVER"] = ws.cell(r + 3, 3).value
-    # loan worked example (first scheduled repayment)
-    ln = wb["27_Loan"]
-    mon0 = find_row(ln, "Timing and rate")
-    rev = find_row(ln, "Repayment event flag", mon0)
-    ro, rr, rrem, rp, ri = (find_row(ln, s, mon0) for s in ("Opening balance", "Interest rate (p.a.)", "Remaining payments",
-                                                         "Scheduled principal", "Interest accrued"))
-    rintp = find_row(ln, "Interest paid in cash", mon0)
-    for c in range(5, 5 + 288):
-        if ln.cell(rev, c).value == 1:
-            B["L_T"] = c - 4
-            B["L_OPEN"] = ln.cell(ro, c).value
-            B["L_RATE"] = ln.cell(rr, c).value
-            B["L_REM"] = ln.cell(rrem, c).value
-            B["L_PRIN"] = ln.cell(rp, c).value
-            B["L_INT_M"] = ln.cell(ri, c).value
-            B["L_DATE"] = wb["20_Timeline"].cell(find_row(wb["20_Timeline"], "Month start date"), c).value
-            break
-    # sensitivity values
-    se = wb["52_Sensitivity"]
-    r0 = find_row(se, "One-way: Sale price")
-    B["EIRR_P90"] = se.cell(r0 + 2 + 3, 4).value     # 0.9 row: label, formula, 0.7, 0.8, 0.9
-    B["EIRR_C110"] = se.cell(find_row(se, "One-way: Construction cost") + 2 + 5, 4).value
-    rs = find_row(se, "Scenario grid")
-    B["SC"] = {k: (se.cell(rs + 2 + k, 4).value, se.cell(rs + 2 + k, 6).value, se.cell(rs + 2 + k, 7).value) for k in (1, 2, 3, 4)}
-    return A, Ap, Ar, B
-
+IMG = os.path.join(HERE, "img2")
+SRC = os.environ.get("RAPHA_SRC", "/tmp/claude-0/v2/out")
 
 CSS = """
 @page { size: A4; margin: 0; }
@@ -128,13 +82,17 @@ ol.legend li span { display: inline-block; width: 16px; height: 16px; border-rad
 """
 
 
-def fig(name, cap, callouts=(), legend=(), width=100, crop=None):
-    if crop:
-        from cropgrid import crop as _crop
-        cwd = os.getcwd()
-        os.chdir(HERE)
-        name = _crop(name.replace(".png", ""), *crop)
-        os.chdir(cwd)
+def crop(name, t=0.0, b=1.0, l=0.0, r=1.0):
+    im = Image.open(os.path.join(IMG, name))
+    W, H = im.size
+    out = f"c_{name[:-4]}_{int(t*100)}_{int(b*100)}_{int(l*100)}_{int(r*100)}.png"
+    im.crop((int(W * l), int(H * t), int(W * r), int(H * b))).save(os.path.join(IMG, out))
+    return out
+
+
+def fig(name, cap, callouts=(), legend=(), width=100, crop_=None):
+    if crop_:
+        name = crop(name, *crop_)
     path = os.path.join(IMG, name)
     cos = "".join(f'<span class="co" style="left:{x}%;top:{y}%">{n}</span>' for n, x, y in callouts)
     leg = ""
@@ -144,469 +102,455 @@ def fig(name, cap, callouts=(), legend=(), width=100, crop=None):
             f"<figcaption>{cap}</figcaption>{leg}</figure>")
 
 
-def chapter(no, title, en, marker):
-    return (f'<div class="chno">ምዕራፍ {no}<span class="marker">{marker}</span></div><h1 class="ch">{title}</h1>'
+def chapter(no, title, en, marker, part=None):
+    p = f'<div class="part">{part}</div>' if part else ""
+    return (f'{p}<div class="chno">ምዕራፍ {no}<span class="marker">{marker}</span></div><h1 class="ch">{title}</h1>'
             f'<div class="en">{en}</div><div class="chrule"></div>')
 
 
-def build(A, Ap, Ar, B, toc_pages=None):
+def load_facts():
+    C, wb = grab(f"{SRC}/main.xlsx", C_NAMES + P_NAMES)
+    H, _ = grab(f"{SRC}/s2.xlsx", C_NAMES)
+    P = {k: C[k] for k in P_NAMES}
+    ws = wb["P2_Calc"]
+    for r in range(1, ws.max_row + 1):
+        if ws.cell(r, 2).value == "Month after completion":
+            P["AM1"] = [ws.cell(r + 1, c).value for c in range(2, 10)]
+            P["AM2"] = [ws.cell(r + 2, c).value for c in range(2, 10)]
+            break
+    return C, H, P
+
+
+EXTRA_CSS = """
+.part { background:#0F2A44; color:#F3D7AE; display:inline-block; padding:1mm 4mm; border-radius:3px; font-size:9pt; margin-top:4mm; }
+.partA { border-left:6px solid #2A9D8F; } .partB { border-left:6px solid #1F5FAD; }
+.step { display:flex; gap:3mm; margin:2mm 0; } .step .n { flex:0 0 7mm; height:7mm; border-radius:50%; background:#D98E2B; color:#fff;
+  font:700 10pt/7mm 'Liberation Sans'; text-align:center; } .step .t { flex:1; }
+"""
+
+
+def build(C, H, P, toc_pages=None):
     tp = toc_pages or {}
     S = []
-    # ------------------------------------------------------------------ cover
+    # ================================================================ cover
     S.append(f"""<div class="cover">
-<div class="badge">የአጠቃቀም መመሪያ</div><div class="badge">ስሪት 1.0</div>
+<div class="badge">የአጠቃቀም መመሪያ</div><div class="badge">ስሪት 2.0</div><div class="badge">Excel · Google Sheets</div>
 <h1>የራፋ የግንባታ ፕሮጀክት<br>ትርፋማነት ሞዴል</h1>
 <h2>Rapha Development Profitability Model — ደረጃ በደረጃ የአማርኛ መመሪያ</h2>
 <div class="rule"></div>
-<p style="font-size:12pt;color:#E6ECF2;max-width:150mm;text-align:left">ለራስዎ ቤት የግንባታ ወጪ ግምት ከማውጣት ጀምሮ፣ የንግድ ሕንፃ ትርፋማነትን፣
-የብድር ክፍያ ሰንጠረዥን፣ የፋይናንስ መግለጫዎችንና የስጋት ትንተናን እስከ መሥራት — የፋይናንስ ባለሙያ ሳይሆኑ ሞዴሉን እንዴት እንደሚጠቀሙ የሚያሳይ መመሪያ።</p>
-<div class="meta">ሁለት ምሳሌዎችን ይዟል፡ ምሳሌ ሀ — G+1 የቤተሰብ መኖሪያ ቤት (አዲስ አበባ) · ምሳሌ ለ — B+G+8 ቅይጥ አገልግሎት ሕንፃ (አዲስ አበባ)<br>
-ፋይሎች፡ Rapha_Development_Profitability_Model_v1.xlsx · Rapha_Model_Blank.xlsx<br>
+<p style="font-size:12pt;color:#E6ECF2;max-width:150mm;text-align:left">አንድ ፋይል፣ ሁለት መሣሪያዎች፡ <b>ሀ — የግል መኖሪያ ቤት</b> የወጪ ግምትና የቤት ብድር ዕቅድ፤
+<b>ለ — የንግድ ሕንፃ</b> ሙሉ ትርፋማነት፣ የኪራይ መዝገብ፣ የሆቴል ኪራይ፣ የIFRS መግለጫዎች፣ የባንክ ምጣኔዎችና የቀጥታ የስጋት ትንተና።
+በExcel እና በGoogle Sheets ይሠራል።</p>
+<div class="meta">ሦስት ምሳሌዎችን ይዟል፡ የG+1 የቤተሰብ ቤት · ምሳሌ 1 — B+G+8 ቅይጥ ሕንፃ · ምሳሌ 2 — B+G+10 የንግድ ማዕከልና ሆቴል (መሬት በአጋርነት)<br>
+ፋይሎች፡ Rapha_Development_Profitability_Model_v2.xlsx · Rapha_Model_Blank.xlsx<br>
 ይህ መሣሪያ ለዕቅድ ብቻ ነው፤ የኢንቨስትመንት፣ የግብር ወይም የሕግ ምክር አይደለም።</div></div>""")
-    # ------------------------------------------------------------------ TOC
-    toc = [("1", "መግቢያ", "CH01"), ("2", "ሁለት መንገዶች፡ የግል ቤት ወይስ የንግድ ፕሮጀክት?", "CH02"), ("3", "ከመጀመርዎ በፊት", "CH03"),
-           ("4", "ደረጃ በደረጃ ግብዓት", "CH04"), ("5", "የግንባታ ወጪና የገንዘብ ፍሰት", "CH05"), ("6", "የብድር ክፍያ ሰንጠረዥ", "CH06"),
-           ("7", "የፋይናንስ መግለጫዎች", "CH07"), ("8", "ትርፋማነትና ተመላሽ", "CH08"), ("9", "ስጋትና ትንተና", "CH09"),
-           ("10", "ዳሽቦርድ", "CH10"), ("11", "ቼኮች", "CH11"), ("12ሀ", "ምሳሌ ሀ፡ የግል ቤት ወጪ ግምት", "CH12A"),
-           ("12ለ", "ምሳሌ ለ፡ የንግድ ፕሮጀክት ትርፋማነት", "CH12B"), ("13", "ተደጋጋሚ ጥያቄዎችና መዝገበ ቃላት", "CH13"),
-           ("14", "የኃላፊነት ማስተባበያ", "CH14")]
+    # ================================================================ TOC
+    toc = [("1", "መግቢያ — በስሪት 2 ምን ተቀየረ?", "CH01"), ("2", "መጀመሪያ ገጽ፡ የግል ቤት ወይስ የንግድ ፕሮጀክት?", "CH02"),
+           ("3", "ከመጀመርዎ በፊት — Excel እና Google Sheets", "CH03"),
+           ("4", "ክፍል ሀ · የቤትዎ ግብዓቶች (P1)", "CH04"), ("5", "ክፍል ሀ · ስሌቶች፣ የገንዘብ ምንጭና የብድር ሰንጠረዥ (P2)", "CH05"),
+           ("6", "ክፍል ሀ · የቤት ግምት ገጽና ማረጋገጫዎች (P3–P4)", "CH06"),
+           ("7", "ክፍል ለ · የፕሮጀክቱ ግብዓቶችና ሁኔታዎች (10–12)", "CH07"), ("8", "ክፍል ለ · የቦታ ዝርዝርና የኪራይ መዝገብ (13)", "CH08"),
+           ("9", "ክፍል ለ · ወጪ፣ ወርሃዊ ግንባታና ብድር (20–30)", "CH09"), ("10", "ክፍል ለ · የፋይናንስ መግለጫዎች (40–43)", "CH10"),
+           ("11", "ክፍል ለ · ተመላሽና ውሳኔ (50–51)", "CH11"), ("12", "ክፍል ለ · የቀጥታ ስጋትና የሚዛን ነጥብ (52)", "CH12"),
+           ("13", "ክፍል ለ · ዳሽቦርድና ቼኮች (01, 60)", "CH13"), ("14", "ምሳሌ 1፡ B+G+8 ቅይጥ ሕንፃ", "CH14"),
+           ("15", "ምሳሌ 2፡ የንግድ ማዕከልና ሆቴል", "CH15"), ("16", "የራስዎን ፕሮጀክት ማስገባት — የማረጋገጫ ዝርዝር", "CH16"),
+           ("17", "መዝገበ ቃላትና ማሳሰቢያ", "CH17")]
     rows = "".join(f'<tr><td style="width:14mm;color:#0F2A44;font-weight:700">{n}</td><td>{t}</td><td class="p">{tp.get(mk, "")}</td></tr>'
                    for n, t, mk in toc)
     S.append(f"""<div class="page"><h1 class="ch" style="margin-top:8mm">ማውጫ</h1><div class="chrule"></div>
 <table class="toc">{rows}</table>
-<div class="box blue"><b class="t">ይህን መመሪያ እንዴት ማንበብ ይቻላል?</b>
-የራስዎን ቤት ብቻ መገመት ከፈለጉ፡ ምዕራፍ 1፣ 2 እና 3ን አንብበው በቀጥታ ወደ <b>ምዕራፍ 12ሀ</b> ይሂዱ (መንገድ ሀ)።
-ለሽያጭ ወይም ለኪራይ የሚገነቡ ከሆነ፡ ሁሉንም ምዕራፎች በቅደም ተከተል ይከተሉ (መንገድ ለ)።
-በምስሎቹ ላይ ያሉት <b style="color:#D98E2B">ብርቱካናማ ቁጥሮች</b> ከምስሉ በታች ካለው ማብራሪያ ጋር ይዛመዳሉ።</div>
-<div class="box"><b class="t">ቃላት</b> እንደ IRR፣ NPV፣ DSCR፣ IFRS ያሉ የእንግሊዝኛ ቃላት በመጀመሪያ ሲጠቀሱ በአማርኛ ተብራርተዋል። ሙሉ ዝርዝሩ በምዕራፍ 13 መዝገበ ቃላትና በሞዴሉ ገጽ 61 ይገኛል።</div>
+<div class="two"><div class="pathA"><b style="color:#2A9D8F">የራስዎን ቤት ብቻ ለመገመት</b><br>ምዕራፍ 1–6ን ያንብቡ (መንገድ ሀ)። ቀሪው አያስፈልግዎትም።</div>
+<div class="pathB"><b style="color:#1F5FAD">ለሽያጭ ወይም ለኪራይ ለሚገነቡ</b><br>ምዕራፍ 1–3ን ከዚያ 7–16ን ይከተሉ (መንገድ ለ)።</div></div>
+<div class="box blue"><b class="t">ምስሎቹን እንዴት ማንበብ?</b>በምስሎቹ ላይ ያሉት <b style="color:#D98E2B">ብርቱካናማ ቁጥሮች</b> ከምስሉ በታች ካለው ማብራሪያ ጋር ይዛመዳሉ።
+በመመሪያው ውስጥ የተጠቀሱት ቁጥሮች ሁሉ ከሞዴሉ ፋይል በቀጥታ የተወሰዱ ናቸው።</div>
+<div class="box"><b class="t">ቃላት</b>እንደ IRR፣ NPV፣ DSCR፣ IFRS ያሉ የእንግሊዝኛ ቃላት በመጀመሪያ ሲጠቀሱ ተብራርተዋል፤ ሙሉ ዝርዝሩ በምዕራፍ 17 እና በሞዴሉ ገጽ 61 ይገኛል።</div>
 </div>""")
-    # ------------------------------------------------------------------ CH1
-    S.append(f"""<div class="page">{chapter(1, "መግቢያ", "Introduction – what the model answers", "CH01")}
-<p>ቤት ወይም ሕንፃ ከመገንባትዎ በፊት ሁሉም ሰው የሚጠይቀው ጥያቄ አንድ ነው፡ <b>«ፕሮጀክቴ ያተርፋል?»</b> — ለራስዎ ቤት ደግሞ <b>«ስንት ያስወጣኛል፣ እንዴትስ እከፍለዋለሁ?»</b>።
-የራፋ የግንባታ ፕሮጀክት ትርፋማነት ሞዴል እነዚህን ጥያቄዎች በአንድ የExcel ፋይል ይመልሳል። እርስዎ የሚያውቋቸውን መረጃዎች (የቤቱ ስፋት፣ የማጠናቀቂያ ደረጃ፣
-የብድር ሁኔታ፣ የሽያጭ ዋጋ…) ያስገባሉ፤ ሞዴሉ ቀሪውን ሁሉ በቀመር ያሰላል።</p>
-<h2>ሞዴሉ የሚመልሳቸው ጥያቄዎች</h2>
-<table><tr><th>ጥያቄ</th><th>መልሱ የሚገኝበት</th></tr>
-<tr><td>ግንባታው በጠቅላላ ስንት ያስወጣል? በካሬ ሜትር ስንት ነው?</td><td>የቤት ግምት ገጽ (02) እና የወጪ ገጽ (22)</td></tr>
-<tr><td>በየወሩ ምን ያህል ገንዘብ ያስፈልጋል? ለኮንትራክተሩ መቼ ይከፈላል?</td><td>ወርሃዊ የግንባታ ገጽ (23) እና የቤት ግምት ገጽ</td></tr>
-<tr><td>ብድሩ ወርሃዊ ክፍያ ስንት ነው? መቼ ተከፍሎ ያልቃል?</td><td>የብድር ገጽ (27)</td></tr>
-<tr><td>ፕሮጀክቱ ያተርፋል? ስንት በመቶ ተመላሽ ይሰጣል?</td><td>ዳሽቦርድ (01) እና የተመላሽ ገጽ (50)</td></tr>
-<tr><td>ባንኩ ብድሩን ይሰጠኛል? ሽፋኑ (DSCR) በቂ ነው?</td><td>የባንክ መረጃ ገጽ (43) እና ዳሽቦርድ</td></tr>
-<tr><td>ዋጋ ቢቀንስ፣ ወጪ ቢጨምር ወይም ግንባታ ቢዘገይ ምን ይሆናል?</td><td>የስጋት ትንተና ገጽ (52)</td></tr></table>
-<h2>ለማን ነው?</h2>
-<p><b>የግል ቤት ገንቢዎች</b> — G+0 ቪላ፣ G+1 ወይም G+2 የቤተሰብ ቤት ለሚሠሩ፤ የወጪ ግምትና የቤት ብድር ዕቅድ ብቻ ለሚፈልጉ።
-<b>አልሚዎችና ባለሀብቶች</b> — ለሽያጭ (አፓርትመንት፣ ሱቅ፣ ቢሮ) ወይም ለኪራይ ለሚገነቡ። <b>ኮንትራክተር-አልሚዎች</b> እና
-<b>ባንኮች/አበዳሪዎች</b> — ፕሮጀክቱ ብድሩን መመለስ ይችል እንደሆነ ለሚፈትሹ።</p>
-<h2>በውስጡ ምን አለ?</h2>
-<table><tr><th>ቡድን</th><th>ገጾች</th><th>ሥራቸው</th></tr>
-<tr><td>መነሻ</td><td>00 መጀመሪያ</td><td>አራቱ ጥያቄዎች፣ የማረጋገጫ ሁኔታና ወደ ገጾች መሄጃ</td></tr>
-<tr><td>ሪፖርት</td><td>01 ዳሽቦርድ፣ 02 የቤት ግምት</td><td>በአንድ ገጽ የሚታተሙ ማጠቃለያዎች</td></tr>
-<tr><td>ግብዓት</td><td>10 ግብዓቶች፣ 11 ሁኔታዎች፣ 12 የግብር ሕግ</td><td>እርስዎ የሚሞሉት ብቸኛው ቦታ</td></tr>
-<tr><td>ሞተር (Engine)</td><td>20–26</td><td>ጊዜ፣ ስፋት፣ ወጪ፣ ወርሃዊ ግንባታ፣ ገቢ፣ ወጪ፣ ንብረት</td></tr>
-<tr><td>ፋይናንስ</td><td>27–30</td><td>ብድር፣ ግብር፣ ተ.እ.ታ፣ የሥራ ማስኬጃ ካፒታል</td></tr>
-<tr><td>መግለጫዎች</td><td>40–43</td><td>ትርፍና ኪሳራ፣ ሀብትና ዕዳ፣ የገንዘብ ፍሰት፣ ምጣኔዎች</td></tr>
-<tr><td>ትንተና</td><td>50–52</td><td>ተመላሽ፣ የመመለሻ ጊዜ፣ የስጋትና የሚዛን ነጥብ ትንተና</td></tr>
-<tr><td>ቁጥጥር</td><td>60 ቼኮች፣ 61 መዝገበ ቃላት</td><td>23 ራስ-ሰር ማረጋገጫዎችና የቃላት ዝርዝር</td></tr></table>
-<h2>የሥራ ፍሰት በአንድ ገጽ</h2>
-<div class="flowwrap"><div class="flow"><div class="n amber"><b>1. ግብዓቶች</b>ስፋት፣ ዋጋ፣ ብድር፣ ግብር<br><span class="small" style="color:#fff">ገጽ 10–12</span></div><div class="a">➜</div>
-<div class="n"><b>2. ሞተር</b>ወጪ፣ ወርሃዊ ግንባታ፣ ገቢ፣ ብድር፣ ግብር<br><span class="small" style="color:#C9D3DF">ገጽ 20–30</span></div><div class="a">➜</div>
-<div class="n"><b>3. መግለጫዎች</b>ትርፍና ኪሳራ፣ ሀብትና ዕዳ፣ የገንዘብ ፍሰት<br><span class="small" style="color:#C9D3DF">ገጽ 40–43</span></div><div class="a">➜</div>
-<div class="n"><b>4. ዳሽቦርድ</b>ውሳኔ፡ አዋጭ / በድንበር ላይ / አዋጭ አይደለም<br><span class="small" style="color:#C9D3DF">ገጽ 01–02, 50–52</span></div></div></div>
-<p class="small">ማረጋገጫዎቹ (ገጽ 60) በሁሉም ደረጃ ስህተት እንዳይኖር ይቆጣጠራሉ። ቁጥር የሚጽፉት በደረጃ 1 ብቻ ነው።</p></div>""")
-    # ------------------------------------------------------------------ CH2
-    S.append(f"""<div class="page">{chapter(2, "ሁለት መንገዶች፡ የግል ቤት ወይስ የንግድ ፕሮጀክት?", "Two paths – choosing the project mode", "CH02")}
-<p>ሞዴሉ ሁለት ዓይነት ተጠቃሚዎችን በአንድ ፋይል ያገለግላል። የመጀመሪያው ጥያቄ — <b>«ምን እየገነቡ ነው?»</b> — የትኛውን መንገድ እንደሚከተሉ ይወስናል።</p>
-<table><tr><th>ቁጥር</th><th>ዓይነት (Mode)</th><th>ለማን</th><th>የሚያገኙት</th></tr>
-<tr><td>0</td><td>የግል መኖሪያ ቤት (የወጪ ግምት ብቻ)</td><td>ለራሱ ቤት የሚሠራ</td><td>ወጪ፣ ወርሃዊ ገንዘብ፣ የክፍያ ደረጃዎች፣ የቤት ብድር፣ የመክፈል አቅም</td></tr>
-<tr><td>1</td><td>ለሽያጭ መገንባት (Build-to-Sell)</td><td>አፓርትመንት/ሱቅ ሸጦ የሚወጣ አልሚ</td><td>ቅድመ-ሽያጭ፣ ሙሉ መግለጫዎች፣ ተመላሽ</td></tr>
-<tr><td>2</td><td>ለኪራይ መገንባት (Build-to-Rent)</td><td>ሕንፃውን ይዞ የሚያከራይ</td><td>የኪራይ ገቢ፣ ሙሉ መግለጫዎች፣ የባንክ ምጣኔዎች</td></tr>
-<tr><td>3</td><td>ቅይጥ (Mixed)</td><td>ከፊሉን ሸጦ ከፊሉን የሚያከራይ</td><td>ሁሉም — ሽያጭና ኪራይ በአንድ ላይ</td></tr></table>
-<div class="two"><div class="pathA"><h3 style="color:#2A9D8F;margin-top:0">መንገድ ሀ — የግል ቤት</h3>
-<p>• ጥያቄ 1፡ <b>0</b> ይምረጡ።<br>• በግብዓት ገጹ ላይ <b>ብሎክ 2 (የቤት ግምት መረጃ)</b>፣ <b>ብሎክ 3 (የፎቅ ስፋት)</b> እና <b>ብሎክ 4 (ወጪ)</b>ን ብቻ ይሙሉ።<br>
-• ውጤቱን በ<b>የቤት ግምት ገጽ (02)</b> ያንብቡ — በአንድ A4 ገጽ ይታተማል።<br>• ትርፋማነት፣ IFRS፣ ግብርና የባንክ ምጣኔዎች አይታዩዎትም፤
-እነዚያ ገጾች «ለግል ፕሮጀክት አያስፈልግም» የሚል ቀይ ማሳሰቢያ ያሳያሉ።<br>• በኋላ ከፊሉን ለማከራየት ካሰቡ «I may rent out part of the house» የሚለውን ያብሩ።</p>
-<p class="small">➜ በቀጥታ ወደ ምዕራፍ 12ሀ መሄድ ይችላሉ።</p></div>
-<div class="pathB"><h3 style="color:#1F5FAD;margin-top:0">መንገድ ለ — የንግድ ፕሮጀክት</h3>
-<p>• ጥያቄ 1፡ <b>1፣ 2 ወይም 3</b> ይምረጡ።<br>• ሁሉንም የግብዓት ብሎኮች (1–11) ይሙሉ።<br>
-• ውጤቱን በ<b>ዳሽቦርድ (01)</b>፣ በመግለጫዎች (40–43) እና በተመላሽ ገጽ (50) ያንብቡ።<br>
-• ከባንክ ጋር ከመነጋገርዎ በፊት በሁኔታዎችና በስጋት ትንተና (ገጽ 52) ይፈትኑ።</p>
-<p class="small">➜ ምዕራፍ 3–11 እና 12ለን ይከተሉ።</p></div></div>
-<div class="box"><b class="t">አንድ ሞተር ለሁሉም</b>ሁለቱም መንገዶች ተመሳሳይ የወጪ ሞተር ይጠቀማሉ። ስለዚህ በዓይነት 0 የወጪ ግምት ጀምረው፣ ዓይነቱን ወደ 2 ወይም 3 ሲቀይሩ በዚያው መረጃ
-ትርፋማነቱን ወዲያውኑ ያያሉ። ማረጋገጫ C16 የቤት ግምቱ ጠቅላላ ወጪ ከንግድ ሞዴሉ ወጪ ጋር እኩል መሆኑን ይፈትሻል።</div>
-{fig("B_00_Start_1.png", "ምስል 2.1 — የመጀመሪያ ገጽ (00 Start)። ምሳሌ ለ በዓይነት 3 ተጭኗል።",
-     [(1, 23, 28.4), (2, 23, 34), (3, 23, 39.3), (4, 23, 45), (5, 69, 22.7), (6, 6, 59)],
-     ["ጥያቄ 1፡ ምን እየገነቡ ነው? (ዓይነት 0–3)", "ጥያቄ 2፡ የትኛው መረጃ — የእኔ ፕሮጀክት፣ ምሳሌ ሀ ወይም ምሳሌ ለ", "ጥያቄ 3፡ ሁኔታ (መሠረታዊ፣ ብሩህ፣ አስቸጋሪ፣ ባንክ)",
-      "ጥያቄ 4፡ መግለጫዎች በብር፣ በሺህ ብር ወይስ በሚሊዮን", "የሁኔታ ሳጥን፡ ማረጋገጫዎች፣ ውሳኔ፣ ጠቅላላ ወጪ", "መሄጃ — በዓይነቱ መሠረት ይቀየራል"], crop=(0.005, 0.6, 0, 1))}
+    # ================================================================ CH1
+    S.append(f"""<div class="page">{chapter(1, "መግቢያ — በስሪት 2 ምን ተቀየረ?", "Introduction – what is new in version 2", "CH01")}
+<p>ቤት ወይም ሕንፃ ከመገንባትዎ በፊት የሚጠይቁት ጥያቄ እንደ ፕሮጀክቱ ዓይነት ይለያያል። ለራስዎ ቤት፡ <b>«ስንት ያስወጣኛል? በየወሩ ስንት ገንዘብ ያስፈልጋል?
+ብድሩን እችለዋለሁ?»</b>። ለንግድ ሕንፃ፡ <b>«ያተርፋል? ባንኩ ያበድረኛል? ዋጋ ቢወርድ ወይም ግንባታው ቢዘገይ ምን ይሆናል?»</b>።
+ስሪት 2 እነዚህን ሁለት ጥያቄዎች <b>በሁለት የተለያዩ ክፍሎች</b> ይመልሳል — በአንድ ፋይል ውስጥ፣ ግን ግብዓቶቻቸውና ስሌቶቻቸው ተለያይተው።</p>
+<h2>በስሪት 2 የተጨመሩና የተሻሻሉ</h2>
+<table><tr><th style="width:42%">ለውጥ</th><th>ጥቅሙ</th></tr>
+<tr><td><b>ሁለት መንገዶች</b> — በመጀመሪያ ገጽ «የግል ቤት» ወይም «የንግድ ፕሮጀክት» ይመርጣሉ</td><td>የግል ቤት ገንቢ የንግድ ግብዓቶችን አያይም፤ የንግድ ሞዴሉ ደግሞ የቤተሰብ ገቢ የመሳሰሉ የግል መረጃዎችን አይጠይቅም</td></tr>
+<tr><td><b>ለግል ቤት የተለየ ክፍል</b> (P1–P4)፡ የራሱ የወጪ መረጃ ቋት፣ ወርሃዊ ወጪ፣ የቁጠባ→ቤተሰብ→ብድር ቅደም ተከተልና በወር የተዘረዘረ የ240 ወራት የብድር ሰንጠረዥ</td><td>ቀላል፣ ግልጽና በአንድ ገጽ የሚታተም የቤት ግምት</td></tr>
+<tr><td><b>የቦታ ዝርዝርና የኪራይ መዝገብ</b> (ገጽ 13)፡ እስከ 12 ቦታዎች በዓይነት — ሱቅ፣ ቢሮ፣ መኖሪያ፣ ማሳያ፣ ምግብ ቤት፣ መጋዘን፣ ሆቴል፣ መኪና ማቆሚያ፣ የባለቤት ቢሮ፣ ያለ ኪራይ የሚሰጥ ቦታ</td><td>እያንዳንዱ ቦታ የራሱ ዋጋ፣ ኪራይና የተያዘ መጠን አለው</td></tr>
+<tr><td><b>የሆቴል ኦፕሬተር ኪራይ</b>፣ አራት ስም ያላቸው ሌሎች ገቢዎች፣ የልዩ ባለሙያ አማካሪ ክፍያና ከመክፈቻ በፊት ወጪ</td><td>ለትልልቅ የንግድ ማዕከላት የሚያስፈልጉ ዝርዝሮች</td></tr>
+<tr><td><b>ሁሉም ምርጫዎች ዝርዝር (dropdown)</b> ናቸው፤ ለእያንዳንዱ ግብዓት «እርግጠኝነት» (ከፍተኛ/መካከለኛ/ዝቅተኛ) እና «ምንጭ» ዓምድ</td><td>የመጻፍ ስህተት ይቀንሳል፤ ደካማ ግምቶች ይታወቃሉ</td></tr>
+<tr><td><b>የቀጥታ የስጋት ትንተና</b> — Data Table የለም፤ ቶርኔዶ፣ የሚዛን ነጥቦችና «ቢሆንስ» ማስተካከያዎች ሁሉ በቀመር ይሰላሉ</td><td>በGoogle Sheets እና በLibreOffice ጭምር በትክክል ይሠራል</td></tr>
+<tr><td><b>ጠቅ ሲያደርጉ ወደ ገጹ የሚወስዱ አገናኞች</b> — በመጀመሪያ ገጽና በእያንዳንዱ ገጽ ራስጌ «◂ Start» እና «Dashboard ▸»</td><td>በExcel እና በGoogle Sheets በቀጥታ ወደሚፈልጉት ገጽ ይዘልላሉ</td></tr>
+<tr><td><b>ራሱን የሚጽፍ ማጠቃለያ</b> — በዳሽቦርዱ ላይ «ዋና ዋና ግኝቶች»</td><td>ቁጥሮቹን በቃላት ያብራራል፤ ግብዓት ሲቀየር ራሱ ይቀየራል</td></tr></table>
+<h2>የፋይሉ አወቃቀር</h2>
+<table><tr><th>ክፍል</th><th>ገጾች</th><th>ሥራቸው</th></tr>
+<tr><td>መነሻ</td><td>00 Start</td><td>መንገዱን መምረጥ፣ የሁኔታ ሳጥኖች፣ ወደ ሁሉም ገጾች አገናኝ</td></tr>
+<tr class="partA"><td>ሀ · የግል ቤት</td><td>P1 Inputs · P2 Calc · P3 Estimate · P4 Checks</td><td>ግብዓት → ስሌትና ብድር → የአንድ ገጽ ግምት → ማረጋገጫዎች</td></tr>
+<tr class="partB"><td>ለ · ሪፖርት</td><td>01 Dashboard</td><td>ውሳኔ፣ ስድስት ቁልፍ ቁጥሮች፣ ገበታዎች፣ ማጠቃለያ</td></tr>
+<tr class="partB"><td>ለ · ግብዓት</td><td>10 Inputs · 11 Scenarios · 12 TaxLaw · 13 Spaces</td><td>እርስዎ የሚሞሉት ቦታ</td></tr>
+<tr class="partB"><td>ለ · ሞተር</td><td>20–30</td><td>ጊዜ፣ ስፋት፣ ወጪ፣ ወርሃዊ ግንባታ፣ ገቢ፣ ወጪ፣ ንብረት፣ ብድር፣ ግብር፣ ተ.እ.ታ</td></tr>
+<tr class="partB"><td>ለ · መግለጫና ትንተና</td><td>40–43 · 50–52 · 60</td><td>IFRS መግለጫዎች፣ ተመላሽ፣ ስጋት፣ 25 ማረጋገጫዎች</td></tr>
+<tr><td>የጋራ</td><td>61 Glossary</td><td>{len(GLOSSARY)} የእንግሊዝኛ–አማርኛ ቃላት</td></tr></table>
 </div>""")
-    # ------------------------------------------------------------------ CH3
-    S.append(f"""<div class="page">{chapter(3, "ከመጀመርዎ በፊት", "Before you start", "CH03")}
-<h2>የሚያስፈልግዎ</h2>
-<p><b>Microsoft Excel 2016 ወይም ከዚያ በኋላ</b> (Microsoft 365 ይመረጣል)። ፋይሉ ማክሮ የለውም፤ ስለዚህ «Enable Macros» አያስፈልግም።
-LibreOffice ፋይሉን ይከፍታል፣ ነገር ግን የስጋት ሰንጠረዦቹ (Data Tables) በትክክል የሚሠሩት በExcel ነው። ፋይሉን ሲከፍቱ Excel ሁሉንም ቀመሮች እንደገና ያሰላል።</p>
-<h2>የቀለም ኮድ — ከሁሉ የሚበልጠው ሕግ</h2>
+    # ================================================================ CH2
+    S.append(f"""<div class="page">{chapter(2, "መጀመሪያ ገጽ፡ የግል ቤት ወይስ የንግድ ፕሮጀክት?", "The Start sheet – choose your track", "CH02")}
+<p>ፋይሉን ሲከፍቱ <b>00 Start</b> ገጽ ይታያል። የሚያደርጉት የመጀመሪያው ነገር <b>ደረጃ 1</b> ላይ ካለው ዝርዝር አንዱን መምረጥ ነው፡</p>
+<div class="two"><div class="pathA"><h3 style="color:#2A9D8F;margin-top:0">ሀ — Private residence (የግል መኖሪያ ቤት)</h3>
+<p>ለራስዎ ወይም ለቤተሰብዎ ለሚሠሩት G+0 ቪላ፣ G+1፣ G+2 ወይም G+3 ቤት። የሚያገኙት፡ የግንባታ ወጪ ግምትና ክልል፣ ወርሃዊ የገንዘብ ፍላጎት፣
+የኮንትራክተር ክፍያ ደረጃዎች፣ የቁጠባ–ቤተሰብ–ብድር ዕቅድ፣ ወርሃዊ የብድር ክፍያና የመክፈል አቅም። ትርፍ፣ ግብርና IFRS አይመለከቱዎትም።</p></div>
+<div class="pathB"><h3 style="color:#1F5FAD;margin-top:0">ለ — Commercial project (የንግድ ፕሮጀክት)</h3>
+<p>ለሽያጭ፣ ለኪራይ ወይም ለሁለቱም ለሚገነባ ሕንፃ። የፕሮጀክቱን ዓይነት (1 ለሽያጭ · 2 ለኪራይ/ለመያዝ · 3 ቅይጥ)፣ መረጃውን (የእኔ ፕሮጀክት፣
+ምሳሌ 1፣ ምሳሌ 2) እና ሁኔታውን (መሠረታዊ፣ ብሩህ፣ አስቸጋሪ፣ ባንክ) ይመርጣሉ።</p></div></div>
+{fig("P_00_Start_1.png", "ምስል 2.1 — «Private residence» ሲመረጥ፡ ካርድ ሀ ንቁ ነው፤ ካርድ ለ በግራጫ ይጠፋል።",
+     [(1, 51, 18.6), (2, 37, 30.6), (3, 41, 40), (4, 9, 54.5), (5, 75, 34), (6, 7, 80)],
+     ["ደረጃ 1፡ መንገዱን ይምረጡ", "የትኛው መረጃ — የእኔ ቤት ወይም የናሙና ቤት", "የሁኔታ ሳጥን፡ ማረጋገጫዎች፣ ጠቅላላ ወጪ፣ ወርሃዊ ክፍያ፣ የመክፈል አቅም",
+      "ጠቅ ሲያደርጉ ወደ ገጹ የሚወስዱ አገናኞች", "ያልተመረጠው ካርድ በግራጫ ይታያል", "የሁሉም ገጾች ዝርዝር — እያንዳንዱ አገናኝ ነው"],
+     width=100, crop_=(0, 0.63, 0.22, 0.78))}
+</div>""")
+    S.append(f"""<div class="page">
+{fig("C_00_Start_1.png", "ምስል 2.2 — «Commercial project» ሲመረጥ፡ ካርድ ለ ንቁ ነው። ምሳሌ 1 በዓይነት 3 (ቅይጥ) ተጭኗል።",
+     [(1, 84, 30.6), (2, 84, 34.6), (3, 84, 38.6), (4, 93, 50), (5, 54, 66)],
+     ["የፕሮጀክት ዓይነት፡ 1 ለሽያጭ · 2 ለኪራይ/ለመያዝ · 3 ቅይጥ", "መረጃ፡ የእኔ ፕሮጀክት · ምሳሌ 1 · ምሳሌ 2",
+      "ሁኔታ፡ መሠረታዊ · ብሩህ · አስቸጋሪ · የባንክ", "ማረጋገጫዎች፣ ውሳኔ፣ TDC፣ የባለቤት IRR፣ ዝቅተኛ DSCR", "ወደ ዋና ዋና ገጾች መሄጃ"],
+     width=100, crop_=(0, 0.63, 0.22, 0.78))}
+<h2>አገናኞቹ እንዴት ይሠራሉ?</h2>
+<p>በመጀመሪያ ገጽ ላይ ያሉት ሰማያዊ የተሰመረባቸው ጽሑፎች ሁሉ <b>ቋሚ አገናኞች (hyperlinks)</b> ናቸው — አንዱን ጠቅ ሲያደርጉ በቀጥታ ወደዚያ ገጽ ይወስድዎታል።
+በእያንዳንዱ ገጽ ቀኝ ላይኛው ጥግ <b>«◂ Start»</b> ወደ መጀመሪያ ገጽ ይመልስዎታል፤ ከሥሩ ያለው <b>«Dashboard ▸»</b> (ለንግድ ገጾች) ወይም
+<b>«Estimate ▸»</b> (ለግል ቤት ገጾች) ወደ ዋናው ሪፖርት ይወስድዎታል። በስሪት 1 እነዚህ አገናኞች በቀመር (HYPERLINK) ስለነበሩ በGoogle Sheets አይሠሩም ነበር፤
+አሁን ቀመር ስላልሆኑ በExcel፣ በLibreOffice እና በGoogle Sheets እኩል ይሠራሉ።</p>
+<div class="box"><b class="t">ጠቃሚ ምክር</b>ሁለቱም ክፍሎች ሁልጊዜ ይሰላሉ — መንገድ መምረጥ የሚወስነው የትኛው ካርድ ንቁ ሆኖ እንደሚታይ ብቻ ነው። ስለዚህ የቤት ግምትዎንና የንግድ ፕሮጀክትዎን
+በአንድ ፋይል ውስጥ አብረው ማስቀመጥ ይችላሉ።</div>
+</div>""")
+    # ================================================================ CH3
+    S.append(f"""<div class="page">{chapter(3, "ከመጀመርዎ በፊት — Excel እና Google Sheets", "Before you start – Excel and Google Sheets", "CH03")}
+<h2>በExcel</h2>
+<p><b>Microsoft Excel 2016 ወይም ከዚያ በኋላ</b> (Microsoft 365 ይመረጣል)። ፋይሉ ማክሮ የለውም። <b>Formulas › Calculation Options › Automatic</b>
+መመረጡን ያረጋግጡ። ሞዴሉ ዙሪያ-ጥገኛ ቀመር (circularity) ስለሌለው «iterative calculation» አያስፈልግም።</p>
+<h2>በGoogle Sheets</h2>
+<div class="step"><div class="n">1</div><div class="t">ፋይሉን (.xlsx) ወደ Google Drive ይጫኑ (New › File upload)።</div></div>
+<div class="step"><div class="n">2</div><div class="t">ፋይሉን በቀኝ ጠቅ ያድርጉና <b>Open with › Google Sheets</b> ይምረጡ። ቋሚ ቅጂ ለማድረግ <b>File › Save as Google Sheets</b>።</div></div>
+<div class="step"><div class="n">3</div><div class="t">ሁሉም ቀመሮች እንደገና ይሰላሉ (ጥቂት ሰከንዶች)። በመጀመሪያ ገጽ ያሉትን ዝርዝሮችና አገናኞች ይሞክሩ፤ ወደ ገጾቹ መዝለል አለባቸው።</div></div>
+<div class="step"><div class="n">4</div><div class="t"><b>File › Settings › Calculation</b>፡ «Iterative calculation» ጠፍቶ (Off) ይተዉት።</div></div>
+<div class="box green"><b class="t">ለGoogle Sheets የተደረጉ ማስተካከያዎች</b>ቋሚ አገናኞች (ቀመር ያልሆኑ)፤ ዝርዝሮቹ ከተደበቀው «Lists» ገጽ ክልል ይነበባሉ፤
+የቀለም ማስጠንቀቂያዎች (conditional formatting) የሚያነቡት በዚያው ገጽ ያሉ ሕዋሶችን ብቻ ነው፤ Data Table የለም — የስጋት ትንተናው በቀመር ይሰላል፤
+የተሰየሙ ክልሎች (named ranges) ከተግባር ስሞች ጋር አይጋጩም። በሙከራ ፋይል በGoogle Sheets ላይ ተፈትኗል።</div>
+<h2>የቀለም ኮድ — ዋናው ሕግ</h2>
 <table><tr><th>መልክ</th><th>ትርጉም</th><th>ምን ያደርጋሉ?</th></tr>
-<tr><td style="color:#1F4E9C;background:#FFF8E6;border:1px solid #D9DEE4">ሰማያዊ ፊደል፣ ቀላል ቢጫ ጀርባ</td><td>ግብዓት</td><td>እዚህ ብቻ ይጻፉ</td></tr>
+<tr><td style="color:#1F4E9C;background:#FFF8E6;border:1px solid #D9DEE4">ሰማያዊ ፊደል፣ ቀላል ቢጫ ጀርባ</td><td>ግብዓት</td><td>እዚህ ብቻ ይጻፉ ወይም ከዝርዝሩ ይምረጡ</td></tr>
 <tr><td style="color:#1B2430">ጥቁር ፊደል</td><td>ቀመር</td><td>በፍጹም አይጻፉበት</td></tr>
 <tr><td style="color:#1E7B34">አረንጓዴ ፊደል</td><td>ከሌላ ገጽ የመጣ ማገናኛ</td><td>አይጻፉበት</td></tr>
 <tr><td style="background:#FFF2B3;font-weight:700">ቢጫ ጀርባ፣ ደማቅ</td><td>ቁልፍ ውጤት ወይም ማረጋገጫ</td><td>ያንብቡት</td></tr></table>
-<div class="box red"><b class="t">ጥቁር ሕዋስ ላይ አይጻፉ!</b>በቀመር ሕዋስ ላይ ቁጥር ከጻፉ ሞዴሉ ይሰበራል — ብዙውን ጊዜ የሀብትና ዕዳ መግለጫ ሚዛኑን ያጣል (ማረጋገጫ C01 ይወድቃል)።
-በስህተት ከጻፉ Ctrl+Z ይጫኑ ወይም ከዋናው ፋይል አዲስ ቅጂ ይውሰዱ።</div>
-<h2>ስሌትን ማብራት</h2>
-<p>በExcel ውስጥ <b>Formulas › Calculation Options › Automatic</b> መመረጡን ያረጋግጡ። «Automatic except for data tables» ከተመረጠ፣ በገጽ 52 ያሉትን
-የስጋት ሰንጠረዦች ለማደስ <b>F9</b> ይጫኑ። ሞዴሉ ዙሪያ-ጥገኛ ቀመር (circularity) የለውም፤ ስለዚህ «Enable iterative calculation» አያስፈልግም።</p>
-<h2>መረጃዎን የት ያስገባሉ?</h2>
-<p>በገጽ 10 (ግብዓቶች) እያንዳንዱ ግብዓት ሦስት ዓምዶች አሉት፡ <b>E — የእኔ ፕሮጀክት</b>፣ <b>F — ምሳሌ ሀ</b>፣ <b>G — ምሳሌ ለ</b>።
-ዓምድ <b>H (ACTIVE)</b> በመጀመሪያ ገጽ ጥያቄ 2 የመረጡትን ዓምድ ይወስዳል፤ ሞዴሉ የሚጠቀመው ዓምድ H ብቻ ነው። ስለዚህ፡</p>
-<p>1. ጥያቄ 2ን ወደ «1 – My project» ይቀይሩ። 2. በዓምድ E ቁጥሮችዎን ይጻፉ። 3. ምሳሌዎቹን ለንጽጽር እንዳሉ ይተዉዋቸው።</p>
-<div class="box green"><b class="t">ጠቃሚ ልማድ</b>ከመጀመርዎ በፊት ፋይሉን በአዲስ ስም ያስቀምጡ (ለምሳሌ «የእኔ_ቤት_2027.xlsx»)። ባዶ ቅጂ ሲፈልጉ <b>Rapha_Model_Blank.xlsx</b>ን ይጠቀሙ —
-ሁሉም ቁጥሮች ገለልተኛ ናቸው፣ ግን ሁሉም ማረጋገጫዎች ያልፋሉ።</div>
-<h2>ቁጥሮች እንዴት ይታያሉ?</h2>
-<p>አሉታዊ ቁጥሮች በቅንፍ ይታያሉ፤ ለምሳሌ (1,250) ማለት −1,250 ነው። ዜሮ «–» ሆኖ ይታያል። መቶኛ 15.0% ተብሎ ይጻፋል፤ ብዜቶች 1.30x። መግለጫዎቹ
-በነባሪ በሺህ ብር (ETB '000) ናቸው — በመጀመሪያ ገጽ ጥያቄ 4 መቀየር ይችላሉ። የጊዜ ዓምዶቹ <b>C1–C4</b> (የግንባታ ዓመታት) እና <b>O1–O10</b> (የሥራ ዓመታት) ናቸው፤
-ከሥራቸው የኢትዮጵያ ዘመን አቆጣጠር ዓመትም (EC) ተጽፏል።</p>
+<div class="box red"><b class="t">ጥቁር ሕዋስ ላይ አይጻፉ!</b>በቀመር ላይ ቁጥር ከጻፉ ሞዴሉ ይሰበራል (ለምሳሌ የሀብትና ዕዳ መግለጫ ሚዛኑን ያጣል — ማረጋገጫ C01 ይወድቃል)።
+በስህተት ከጻፉ Ctrl+Z ይጫኑ፣ ወይም ከዋናው ፋይል አዲስ ቅጂ ይውሰዱ።</div>
+<h2>መረጃዎን የት ያስገባሉ? — የዓምዶቹ ሕግ</h2>
+<p>እያንዳንዱ የግብዓት ገጽ የመረጃ ዓምዶች አሉት። <b>የግል ቤት (P1)</b>፡ E = የእኔ ቤት፣ F = ናሙና፣ <b>G = ACTIVE</b>።
+<b>የንግድ (10 Inputs)</b>፡ E = የእኔ ፕሮጀክት፣ F = ምሳሌ 1፣ G = ምሳሌ 2፣ <b>H = ACTIVE</b>። ሞዴሉ የሚጠቀመው ACTIVE ዓምዱን ብቻ ነው፤
+እሱም በመጀመሪያ ገጽ «Which data?» የመረጡትን ዓምድ ይወስዳል። ስለዚህ፡ (1) «My house» ወይም «My project» ይምረጡ፣ (2) በዓምድ E ይጻፉ፣
+(3) ምሳሌዎቹን ለንጽጽር እንዳሉ ይተዉዋቸው። ባዶ ፋይሉ (Rapha_Model_Blank.xlsx) ምሳሌዎቹ የተሰረዙበት ተመሳሳይ ሞዴል ነው።</p>
 </div>""")
-    # ------------------------------------------------------------------ CH4
-    blocks = [
-        ("1. ፕሮጀክት", "ስም፣ ቦታ፣ የቦታ ስፋት፣ FAR (የተፈቀደ የወለል ስፋት ጥምርታ)፣ የመጀመሪያ ቀን፣ የግንባታ ወራት", "ግንባታ 12–36 ወር", "ካርታ፣ የሊዝ ውል፣ የግንባታ ፈቃድ"),
-        ("2. የቤት ግምት መረጃ", "የሕንፃ ዓይነት፣ ምድር ቤት፣ የማጠናቀቂያ ደረጃ፣ ገቢ፣ ቁጠባ፣ የቤተሰብ መዋጮ፣ የቤት ብድር፣ ማከራየት", "ክፍያ ≤ 35% የገቢ", "የባንክ ደብተር፣ የቤት ብድር ማመልከቻ"),
-        ("3. የፎቅ ስፋት", "የእያንዳንዱ ፎቅ ጠቅላላ ስፋት (m²) እና አገልግሎቱ (መኖሪያ/ሱቅ/ቢሮ/ማቆሚያ)", "–", "የአርክቴክቸር ፕላን"),
-        ("3ሐ. ቅልጥፍናና ድልድል", "የተጣራ/ጠቅላላ ጥምርታ፣ በቅይጥ ዓይነት የሚሸጠው ድርሻ", "መኖሪያ 75–85%", "አርክቴክት"),
-        ("4. የግንባታ ወጪ", "በክፍል ዋጋ (ብር/m²) ወይም ዝርዝር BOQ፣ አጥር፣ የፍሳሽ ጉድጓድ፣ ታንከር፣ መጠባበቂያ፣ ክፍያዎች፣ የዋጋ ጭማሪ", "መጠባበቂያ 5–15%", "BOQ፣ የኮንትራክተር ዋጋ፣ የራፋ ኢንዴክስ"),
-        ("5. መሬት", "የሊዝ ዋጋ፣ ቅድመ ክፍያ፣ የክፍያ ዓመታት፣ ወለድ ወይም በዓይነት የተዋጣ", "ቅድመ ክፍያ ≥ 10%", "የሊዝ ውል"),
-        ("6. ሽያጭ", "ዋጋ በካሬ፣ የዋጋ ጭማሪ፣ ቅድመ-ሽያጭ በዓመት፣ የክፍያ ዕቅድ፣ ኮሚሽን፣ የገቢ ዕውቅና ፖሊሲ", "ቅድመ ክፍያ 20–40%", "የገበያ ጥናት፣ ደላሎች"),
-        ("7. ኪራይ", "ኪራይ በካሬ በወር፣ የተያዘ መጠን፣ የኪራይ ጭማሪ፣ የቁልፍ ገንዘብ፣ የአገልግሎት ክፍያ", "የተረጋጋ 85–95%", "የአካባቢ ኪራይ ጥናት"),
-        ("8. የሥራ ማስኬጃ", "የንብረት ወጪ፣ የአስተዳደር ክፍያ፣ መድን፣ የንብረት ግብር፣ ጥገና", "15–25% የኪራይ", "የሕንፃ አስተዳዳሪዎች"),
-        ("9. ፋይናንስ", "የካፒታል ድርሻ፣ ወለድ፣ የእፎይታ ጊዜ፣ የብድር ዘመን፣ የአከፋፈል ዓይነት፣ ክፍያዎች፣ DSRA፣ የDSCR ግዴታ", "ወለድ 13–17%", "የባንክ የብድር ውል (term sheet)"),
-        ("10. ግብርና ሂሳብ", "የገቢ ግብር፣ የእርጅና ቅናሽ፣ ኪሳራ ማሸጋገር፣ ተ.እ.ታ፣ የትርፍ ድርሻ፣ ሕጋዊ መጠባበቂያ፣ የአገልግሎት ዘመን", "CIT 30%", "የግብር አማካሪ፣ ገጽ 12"),
-        ("11. ግምገማ", "የቅናሽ መጠን፣ የካፒታል ወጪ፣ የመውጫ ካፕ ሬት፣ ዝቅተኛ ተፈላጊ ተመላሽ (hurdle)", "hurdle 18–25%", "ባለሀብቱ፣ የገበያ ግብይቶች"),
-    ]
-    brows = "".join(f"<tr><td><b>{a}</b></td><td>{b_}</td><td>{c}</td><td>{d}</td></tr>" for a, b_, c, d in blocks)
-    S.append(f"""<div class="page">{chapter(4, "ደረጃ በደረጃ ግብዓት", "Step-by-step inputs (sheet 10)", "CH04")}
-<p>ሁሉም ግምቶች በገጽ 10 ላይ በ12 ብሎኮች ተደራጅተዋል። እያንዳንዱ ረድፍ የእንግሊዝኛና የአማርኛ ስም፣ መለኪያ (unit)፣ ሦስቱ የመረጃ ዓምዶች፣ ሞዴሉ የሚጠቀመው
-ዓምድ H፣ የስም መለያ (range name) እና ማስታወሻ አለው። ዝርዝር ምርጫ ያላቸው ሕዋሶች (ለምሳሌ «Standard») ቀስት ሲጫኑ አማራጮችን ያሳያሉ፤ ከክልል ውጪ ቁጥር
-ሲጽፉ Excel ያስጠነቅቃል።</p>
-{fig("B_10_Inputs_1.png", "ምስል 4.1 — የግብዓት ገጽ (10 Inputs)፣ የመጀመሪያው ክፍል።",
-     [(1, 2.5, 17.5), (2, 46, 17.5), (3, 52.5, 17.5), (4, 59, 17.5), (5, 66, 17.5), (6, 78, 17.5), (7, 1.2, 60.5)],
-     ["የግብዓቱ ስም በእንግሊዝኛና በአማርኛ", "የእኔ ፕሮጀክት — ቁጥሮችዎን እዚህ ይጻፉ", "ምሳሌ ሀ (የግል ቤት)", "ምሳሌ ለ (የንግድ ሕንፃ)",
-      "ACTIVE — ሞዴሉ የሚጠቀመው ዓምድ", "ማስታወሻና ምንጭ", "ብሎክ 2 — የቤት ግምት መረጃ (ለዓይነት 0)"], crop=(0, 0.43, 0, 1))}
-</div><div class="page">
-<h2>እያንዳንዱ ብሎክ ምን ይጠይቃል?</h2>
-<table><tr><th style="width:24mm">ብሎክ</th><th>ምን ያስገባሉ</th><th style="width:26mm">የተለመደ ክልል</th><th style="width:36mm">መረጃውን ከየት ያገኛሉ</th></tr>{brows}</table>
-<div class="box blue"><b class="t">የወጪ መረጃ ቋት (ብሎክ 12)</b>ከግብዓት ገጹ መጨረሻ ላይ ለ9 የግንባታ ክፍሎች በሦስት የማጠናቀቂያ ደረጃዎች (Basic, Standard, Premium) የብር በካሬ
-ዋጋዎች አሉ። የማጠናቀቂያ ደረጃ ሲመርጡ ሞዴሉ ተገቢውን ዓምድ ይወስዳል። እነዚህ ናሙና ዋጋዎች ናቸው — የራፋ የግንባታ ዋጋ ኢንዴክስ ሲገኝ በእሱ ይተኩዋቸው።
-ዝርዝር BOQ ካለዎት ለክፍሉ «Lump sum (BOQ)» መርጠው ጠቅላላ ዋጋውን ያስገቡ።</div>
-<div class="box"><b class="t">ሁኔታዎች (ገጽ 11)</b>ከግብዓቶቹ በተጨማሪ 15 ቁልፍ ነጂዎች — የሽያጭ ዋጋ፣ ኪራይ፣ የተያዘ መጠን፣ የግንባታ ወጪ፣ መዘግየት፣ ወለድ፣ ቅድመ-ሽያጭ፣ የመውጫ ካፕ ሬት… — ለአራቱ ሁኔታዎች
-ማስተካከያ አላቸው። ሞዴሉ የሚጠቀመው፡ <span class="formula">ውጤታማ ዋጋ = ግብዓት × (1 + የሁኔታው ማስተካከያ) × የማስተካከያ ሕዋስ (ገጽ 52)</span>
-«መሠረታዊ» ዓምድ ዜሮ ነው፤ ማለትም የራስዎን ግብዓት እንዳለ ይጠቀማል።</div>
-{fig("B_11_Scenarios_1.png", "ምስል 4.2 — የሁኔታዎች ገጽ (11 Scenarios)። ንቁው ሁኔታ በብርቱካናማ ይደምቃል።",
-     [(1, 2, 44), (2, 55, 44), (3, 88, 44)],
-     ["ማስተካከያ የሚደረግባቸው ነጂዎች", "የአራቱ ሁኔታዎች ማስተካከያዎች (ሰማያዊ = ሊቀየር ይችላል)", "ACTIVE — ከመጀመሪያ ገጽ ጥያቄ 3 የተመረጠው"], width=100, crop=(0, 0.62, 0, 0.95))}
+    # ================================================================ CH4 – P1
+    S.append(f"""<div class="page">{chapter(4, "የቤትዎ ግብዓቶች (P1 Inputs)", "Private track – inputs", "CH04", "ክፍል ሀ · የግል መኖሪያ ቤት")}
+<p>የግል ቤት ክፍል የራሱ የግብዓት ገጽ አለው። ሰባት ብሎኮች አሉት፤ ሁሉም ምርጫዎች ዝርዝር (dropdown) ናቸው፣ ቁጥሮቹም በትክክለኛ ክልል ውስጥ መሆናቸው ይፈተሻል።</p>
+{fig("P_P1_Inputs_1.png", "ምስል 4.1 — P1 Inputs፡ ዓምድ E (አረንጓዴ ርዕስ) የእርስዎ፣ F ናሙናው፣ G ሞዴሉ የሚጠቀመው።", width=100, crop_=(0.07, 0.75, 0, 0.82))}
+<table><tr><th style="width:30%">ብሎክ</th><th>ምን ይጽፋሉ</th></tr>
+<tr><td>1. ቤትዎ</td><td>ስም፣ አካባቢ፣ የቦታ ዓይነት (አዲስ አበባ / የክልል ከተማ)፣ የቦታ ስፋት፣ የመጀመሪያ ቀን፣ የግንባታ ወራት፣ የሕንፃ ዓይነት (G+0…G+3)፣ የማጠናቀቂያ ደረጃ፣ ምድር ቤት</td></tr>
+<tr><td>2. የወለል ስፋት</td><td>ለእያንዳንዱ ወለል ጠቅላላ ስፋት (ግድግዳና ደረጃ ጨምሮ)። ሞዴሉ የሕንፃ ዓይነቱ ከፎቆቹ ጋር መስማማቱን ይፈትሻል</td></tr>
+<tr><td>3. ተጨማሪ ሥራዎችና ክፍያዎች</td><td>አጥር፣ የፍሳሽ ጉድጓድ፣ የውሃ ታንከር፣ ንጣፍ፣ መጠባበቂያ፣ ዲዛይን፣ ቁጥጥር፣ ፈቃድ፣ የቤት ዕቃ፣ የዋጋ ጭማሪ፣ የወጪ ስርጭት፣ የኮንትራክተር ማስያዣ፣ የግምት ክልል</td></tr>
+<tr><td>4. መሬት</td><td>መሬቱ የእርስዎ ከሆነ «Already owned»፤ በግንባታ ወቅት የሊዝ/የግዢ ክፍያ ካለ መጠኑን</td></tr>
+<tr><td>5. የገንዘብ ምንጭ</td><td>ቁጠባ፣ የቤተሰብ/ዳያስፖራ መዋጮ፣ ባንኩ የሚሰጠው ከፍተኛ ብድር፣ ወለድ፣ የመክፈያ ዓመታት፣ የእፎይታ ወራት፣ በግንባታ ወቅት ወለዱ ይከፈላል ወይስ በብድሩ ላይ ይጨመራል፣ የብድር ማመቻቻ ክፍያ</td></tr>
+<tr><td>6. የመክፈል አቅም</td><td>የቤተሰቡ ወርሃዊ የተጣራ ገቢ፣ ሌሎች ወርሃዊ የብድር ክፍያዎች፣ ባንኩ የሚፈቅደው ከፍተኛ ድርሻ (በተለምዶ 30–40%)</td></tr>
+<tr><td>7. አማራጭ፡ ማከራየት</td><td>ከፊሉን ቢያከራዩ፡ ስፋት፣ ወርሃዊ ኪራይ፣ ጭማሪ፣ ባዶ የሚሆንባቸው ወራት፣ ወጪና የኪራይ ገቢ ግብር</td></tr></table>
+<div class="box blue"><b class="t">የወጪ መረጃ ቋት (ብሎክ 8)</b>ከገጹ ግርጌ ለ8 የሥራ ክፍሎች በካሬ ሜትር ዋጋ አለ (Basic / Standard / Premium)። የመረጡት የማጠናቀቂያ ደረጃ
+ዓምዱን ይወስናል። በአካባቢዎ ካለው ወቅታዊ ዋጋ ጋር ያስተካክሉት — ናሙናዎቹ «Sample value — not market advice» ናቸው።</div>
 </div>""")
-    # ------------------------------------------------------------------ CH5
-    S.append(f"""<div class="page">{chapter(5, "የግንባታ ወጪና የገንዘብ ፍሰት", "Construction cost, S-curve, presales and the funding waterfall", "CH05")}
-<h2>የወጪ አሠራር (ገጽ 22)</h2>
-<p>ቀጥተኛ የግንባታ ወጪ (hard cost) = ለእያንዳንዱ ክፍል <b>ዋጋ በካሬ × ጠቅላላ ስፋት × የቦታ ማስተካከያ</b>። ከG+3 በላይ ለሆኑ ሕንፃዎች የፍሬም ዋጋ በፎቅ ይጨምራል፤
-ምድር ቤት ተጨማሪ የቁፋሮ ወጪ አለው። ከዚያ አጥር፣ የፍሳሽ ጉድጓድ፣ ታንከርና ንጣፍ ይደመራሉ። በምሳሌ ለ ቀጥተኛ ወጪው በበጀት ቀን ዋጋ <b>{m(B['HARD_BASE'])} ሚሊዮን ብር</b>
-ሲሆን በዋጋ ጭማሪ <b>{m(B['HARD_ESC_TOT'])} ሚሊዮን</b> ይሆናል።</p>
-<p>ቀጥተኛ ያልሆኑ ወጪዎች፡ መጠባበቂያ (contingency) ከተጨመረው ወጪ ላይ፣ የዲዛይንና የቁጥጥር ክፍያ በመቶኛ፣ ፈቃድና የቤት ዕቃዎች በብር። በመጨረሻ መሬትና የብድር ወጪ
-(IDC — በግንባታ ጊዜ የሚታሰብ ወለድ) ተደምረው <b>ጠቅላላ የልማት ወጪ (TDC)</b> ይገኛል፡ ምሳሌ ለ — <b>{m(B['TDC'])} ሚሊዮን ብር</b> ({etb(B['TDC_M2G'])} ብር በጠቅላላ ካሬ)።</p>
-{fig("B_22_Capex_1.png", "ምስል 5.1 — የወጪ ገጽ (22 Capex)።",
-     [(1, 1.5, 32.5), (2, 31, 52.5), (3, 43, 52.5), (4, 85, 52.5), (5, 1.5, 84.5), (6, 30, 97)],
-     ["የወጪ መወሰኛዎች፡ የማጠናቀቂያ ደረጃ፣ የቦታና የፎቅ ማስተካከያ", "የመጨረሻው በጀት በክፍል (ቢጫ)", "ከመረጃ ቋቱ የመጣ ዋጋ በካሬ",
-      "ዝርዝር BOQ ሲመረጥ የሚገባው ጠቅላላ ዋጋ", "ተጨማሪ የውጭ ሥራዎች", "ጠቅላላ ቀጥተኛ ወጪ በበጀት ቀን ዋጋ"], width=100, crop=(0, 0.64, 0, 1))}
-</div><div class="page">
-<h2>S-ኩርባና ወርሃዊ ገንዘብ (ገጽ 23)</h2>
-<p>ግንባታ በየወሩ እኩል ገንዘብ አይፈልግም — በመጀመሪያና በመጨረሻ ወራት ትንሽ፣ በመሃል ብዙ። ይህ ቅርጽ <b>S-ኩርባ</b> ይባላል። ሞዴሉ ለእያንዳንዱ ወር የሥራ ድርሻ ያሰላል፣
-በዚያ ወር የዋጋ ጭማሪ ያባዛል፣ ከዚያ ዲዛይን፣ ቁጥጥር፣ ፈቃድ፣ የሊዝ ክፍያና ተ.እ.ታን ጨምሮ <b>«ጠቅላላ የገንዘብ ፍላጎት»</b>ን ያወጣል። ከፍተኛው ድምር ፍላጎት በምሳሌ ለ
-<b>{m(B['PEAK_FUND'])} ሚሊዮን ብር</b> ነው። ከኮንትራክተሩ ክፍያ 5% (retention) ተይዞ ከግንባታ በኋላ ይለቀቃል።</p>
-<h2>ቅድመ-ሽያጭ</h2>
-<p>በምሳሌ ለ ከአፓርትመንቶቹ {pct(B['PRESOLD'], 0)} ግንባታው ሳያልቅ ይሸጣሉ። ገዢዎች በክፍያ ዕቅዱ መሠረት ይከፍላሉ፡ ውል ሲፈርሙ 30% ቅድመ ክፍያ፣ ግንባታው ሲገፋ 40%፣ በርክክብ 30%።
-በIFRS 15 መሠረት ገቢው የሚታወቀው በርክክብ ጊዜ ነው (ፖሊሲውን «Over time» ማድረግ ይቻላል)፤ እስከዚያ የተሰበሰበው ገንዘብ <b>ከደንበኞች የተቀበለ ቅድሚያ (contract liability)</b>
-ተብሎ እንደ ዕዳ ይመዘገባል።</p>
-<h2>የገንዘብ ምንጭ ቅደም ተከተል (funding waterfall)</h2>
-<p>በየወሩ ፍላጎቱ በዚህ ቅደም ተከተል ይሸፈናል፡ <b>(1)</b> ጥቅም ላይ እንዲውል የተፈቀደ የቅድመ-ሽያጭ ገንዘብ (ቀሪው በዝግ ሂሳብ ይቀመጣል) → <b>(2)</b> የባለቤት ካፒታል እስከ ቃል ኪዳኑ
-→ <b>(3)</b> የባንክ ብድር እስከ ጣሪያው → <b>(4)</b> ያልተሸፈነው «የገንዘብ ክፍተት» ሆኖ በባለቤቱ ተጨማሪ ይሸፈናል። በምሳሌ ለ፡ ካፒታል {m(B['EQ_DRAWN'])}፣ ቅድመ-ሽያጭ
-{m(B['PS_USED'])}፣ ብድር {m(B['DEBT_DRAWN'])} ሚሊዮን ብር፤ ክፍተት {etb(B['FUND_GAP'])}።</p>
-{fig("B_23_Construction_1.png", "ምስል 5.2 — ወርሃዊ የግንባታ ገጽ (23 Construction) የመጀመሪያ ገጽ — ወራት 1–12።",
-     [(1, 1.2, 31.5), (2, 1.2, 46), (3, 1.2, 70.5), (4, 1.2, 77.5)],
-     ['S-ኩርባ፡ ድምርና ወርሃዊ የሥራ ድርሻ፣ የዋጋ ጭማሪ', 'የወጪ ክምችት በክፍል (IDC ጨምሮ)', 'ጠቅላላ የወጪ ክምችት', 'ለግንባታ የሚያስፈልግ ጥሬ ገንዘብ (ተ.እ.ታ፣ ሊዝ፣ ክፍያዎች) → ጠቅላላ ፍላጎት'], width=100, crop=(0, 0.655, 0, 0.75))}
-<div class="box"><b class="t">ዙሪያ-ጥገኛ ቀመር የለም</b>የብድር ማመቻቻ ክፍያ የሚሰላው IDCን ባላካተተ የብድር መጠን ላይ ነው፤ IDC ደግሞ በየወሩ በመነሻ ቀሪ ሂሳብና በዚያ ወር በወጣው ብድር ላይ ይሰላል።
-ስለዚህ Excel «circular reference» አያሳይም።</div>
+    # ================================================================ CH5 – P2
+    a1, a2 = P["AM1"], P["AM2"]
+    S.append(f"""<div class="page">{chapter(5, "ስሌቶች፣ የገንዘብ ምንጭና የብድር ሰንጠረዥ (P2 Calc)", "Private track – calculations, funding and the loan schedule", "CH05", "ክፍል ሀ · የግል መኖሪያ ቤት")}
+<p>P2 ገጽ ከላይ ወደ ታች ይነበባል፡ የሕንፃ ማጠቃለያ → የዛሬ ዋጋ ወጪ → ወር በወር ወጪ → ማን ይከፍላል → በግንባታ ወቅት ብድር → ድምሮች → የኮንትራክተር ደረጃዎች → የብድር ሰንጠረዥ።</p>
+{fig("P_P2_Calc_1.png", "ምስል 5.1 — P2፡ የሕንፃ ወጪ በዛሬ ዋጋ፣ ወር በወር ወጪና የገንዘብ ምንጭ (ናሙና ቤት፣ 14 ወራት)።",
+     [(1, 26, 26), (2, 26, 50), (3, 26, 75), (4, 26, 89)],
+     ["የዛሬ ዋጋ፡ የመረጃ ቋት ዋጋ × ስፋት × የቦታ ማስተካከያ + ተጨማሪ ሥራዎች", "የS-ኩርባ ስርጭትና የዋጋ ጭማሪ ማባዣ",
+      "ቁጠባ → ቤተሰብ → ብድር → ክፍተት (በዚህ ቅደም ተከተል)", "በግንባታ ወቅት የብድሩ ቀሪ ሂሳብና ወለድ"], width=100, crop_=(0.12, 0.98, 0, 1))}
+<h2>ወጪው እንዴት ይሰላል?</h2>
+<p>ናሙና ቤቱ {etb(P["P_GFA"])} m² ነው። በዛሬ ዋጋ የሕንፃው ወጪ <b>{etb(P["P_BUILD_BASE"])} ብር</b> ነው። ሥራው በ{P["P_MONTHS"]} ወራት በS-ኩርባ ይሰራጫል፤
+በየወሩ ዋጋ በዓመት {pct(P["P_ESC"], 0)} ስለሚጨምር የሕንፃ ሥራው <b>{etb(P["P_BUILD_ESC"])} ብር</b> ይሆናል። መጠባበቂያ ({etb(P["P_CONT_TOT"])})፣ ዲዛይን፣
+ቁጥጥር፣ ፈቃድና የቤት ዕቃ ሲጨመሩ የግንባታ ወጪው <b>{etb(P["P_CONSTR"])} ብር</b> ({etb(P["P_CC_M2"])} ብር/m²) ይሆናል።</p>
 </div>""")
-    # ------------------------------------------------------------------ CH6
-    L_int_q = B["L_OPEN"] * B["L_RATE"] / 4
-    pmt_q = B["L_PRIN"] + L_int_q
-    S.append(f"""<div class="page">{chapter(6, "የብድር ክፍያ ሰንጠረዥ", "Loan amortization schedule (sheet 27)", "CH06")}
-<h2>ቁልፍ ጽንሰ-ሐሳቦች</h2>
-<table><tr><th style="width:42mm">ቃል</th><th>ትርጉም</th></tr>
-<tr><td>IDC — በግንባታ ጊዜ የሚታሰብ ወለድ</td><td>በግንባታ ወቅት ወለድ አይከፈልም፤ በብድሩ ላይ ይደመራል (ይካፈላል)። ወሩ ወለድ = (መነሻ ቀሪ + የዚያ ወር ብድር) × ዓመታዊ ወለድ ÷ 12።</td></tr>
-<tr><td>የእፎይታ ጊዜ (grace)</td><td>ግንባታ ካለቀ በኋላ ዋና ገንዘብ የማይከፈልበት ጊዜ። ወለዱ ይከፈላል (interest-only) ወይም ይደመራል (capitalised)።</td></tr>
-<tr><td>የብድር ዘመን (tenor)</td><td>ከግንባታ መጠናቀቅ ጀምሮ እፎይታን ጨምሮ ብድሩ ተከፍሎ የሚያልቅበት ጊዜ (እስከ 20 ዓመት)።</td></tr>
-<tr><td>እኩል ክፍያ (annuity)</td><td>በየክፍያው ወለድ + ዋና እኩል ነው። መጀመሪያ ብዙው ወለድ፣ በኋላ ብዙው ዋና ገንዘብ ነው። Excel PMT ቀመር።</td></tr>
-<tr><td>እኩል ዋና ገንዘብ</td><td>ዋና ገንዘቡ በእኩል ክፍሎች ይከፈላል፤ ወለዱ ስለሚቀንስ ጠቅላላ ክፍያ በጊዜ ይቀንሳል።</td></tr>
-<tr><td>የመጨረሻ ትልቅ ክፍያ (balloon)</td><td>የተወሰነው መቶኛ እስከ መጨረሻው ክፍያ ይቆያል።</td></tr>
-<tr><td>DSCR — የዕዳ ክፍያ ሽፋን</td><td>ለዕዳ ክፍያ የሚገኝ ገንዘብ (CFADS) ÷ የዓመቱ የዕዳ ክፍያ። 1.30x ማለት ለእያንዳንዱ 1 ብር ክፍያ 1.30 ብር አለ። ባንኮች ዝቅተኛ ገደብ ያስቀምጣሉ።</td></tr>
-<tr><td>ትርፍ ገንዘብ ለብድር (cash sweep)</td><td>ከሽያጭ የሚገኘውን ገንዘብ የተወሰነ መቶኛ ብድሩን ቀድሞ ለመክፈል ማዋል (በምሳሌ ለ 40%)።</td></tr>
-<tr><td>DSRA</td><td>የሚቀጥሉትን ወራት የዕዳ ክፍያ የሚሸፍን በባንክ የሚያዝ መጠባበቂያ ሂሳብ።</td></tr></table>
-<p>የብድር ገጹ ከላይ <b>ዓመታዊ ማጠቃለያ</b> እና <b>የባንክ ማጠቃለያ</b> (ጠቅላላ ወለድ፣ አማካይ ዘመን፣ የመጨረሻ ክፍያ ቀን፣ ዝቅተኛና አማካይ DSCR፣ LLCR፣ ICR፣ ከፍተኛ የብድር ድርሻ) ያሳያል፤
-ከታች ደግሞ ለ288 ወራት (48 የግንባታ + 240 የክፍያ) ወርሃዊ ሰንጠረዥ አለ።</p>
-{fig("B_27_Loan_1.png", "ምስል 6.1 — የብድር ገጽ (27 Loan)፡ ዓመታዊ ማጠቃለያና የባንክ ማጠቃለያ።",
-     [(1, 1.2, 24), (2, 1.2, 31.3), (3, 1.2, 39.6), (4, 1.2, 44.3), (5, 1.2, 53.6), (6, 1.2, 92)],
-     ['የወጣ ብድርና የተደመረ ወለድ (IDC)', 'የተከፈለ ወለድ፣ ዋና ገንዘብና ቅድመ ክፍያ (sweep)', 'የዓመቱ መጨረሻ የብድር ቀሪ', 'የመሬት ሊዝ ክፍያና ዕዳ', 'የብድር ማጠቃለያ፡ ብዛት፣ ወለድ፣ ከፍተኛ ብድር፣ የመጀመሪያ ክፍያ', 'DSCR፣ LLCR፣ ICR እና የብድር ድርሻ'], width=100, crop=(0.01, 0.96, 0, 1))}
-</div><div class="page">
-<h2>በእጅ የተሰላ ምሳሌ — የመጀመሪያው የሩብ ዓመት ክፍያ (ምሳሌ ለ)</h2>
-<p>ምሳሌ ለ የ{B['CONSTR_EFF']} ወር ግንባታ፣ የ12 ወር እፎይታ፣ 10 ዓመት የብድር ዘመንና የሩብ ዓመት እኩል ክፍያ አለው። ስለዚህ የመጀመሪያው ዋና ገንዘብ ክፍያ በወር
-{B['L_T']} ({B['L_DATE']:%B %Y}) ይደርሳል። በዚያን ጊዜ፡</p>
-<table><tr><th>ደረጃ</th><th>ስሌት</th><th class="num">ውጤት (ብር)</th></tr>
-<tr><td>1. የብድሩ ቀሪ (ከቅድመ ክፍያዎች በኋላ)</td><td>ከሞዴሉ</td><td class="num">{etb(B['L_OPEN'])}</td></tr>
-<tr><td>2. የሩብ ዓመት የወለድ መጠን</td><td>{pct(B['L_RATE'])} ÷ 4</td><td class="num">{B['L_RATE'] / 4:.4%}</td></tr>
-<tr><td>3. የቀሩ የክፍያዎች ብዛት</td><td>(120 − 12) ÷ 3</td><td class="num">{B['L_REM']}</td></tr>
-<tr><td>4. እኩል ክፍያ (ወለድ + ዋና)</td><td>PMT({B['L_RATE'] / 4:.4%}, {B['L_REM']}, −{etb(B['L_OPEN'])})</td><td class="num">{etb(pmt_q)}</td></tr>
-<tr><td>5. የሩብ ዓመቱ ወለድ</td><td>{etb(B['L_OPEN'])} × {B['L_RATE'] / 4:.4%}</td><td class="num">{etb(L_int_q)}</td></tr>
-<tr><td>6. ዋና ገንዘብ ክፍያ</td><td>4 − 5</td><td class="num"><b>{etb(B['L_PRIN'])}</b></td></tr></table>
-<p>የሞዴሉ የወር {B['L_T']} «Scheduled principal» ሕዋስ በትክክል {etb(B['L_PRIN'])} ብር ያሳያል። ወለዱ በየወሩ ይከፈላል (በወር ≈ {etb(B['L_INT_M'])} ብር)፣ ዋና ገንዘቡ በየሩብ ዓመቱ።
-ቀጣዩ ክፍያ በአዲሱ (ያነሰ) ቀሪ ላይ እንደገና ይሰላል — ስለዚህ ወለድ ቢቀየር ወይም ቅድመ ክፍያ ቢደረግ ሰንጠረዡ ራሱን ያስተካክላል።</p>
-<div class="box blue"><b class="t">ለቤት ብድር</b>ምሳሌ ሀ ወርሃዊ ክፍያ ይጠቀማል፡ የ{etb(A['DEBT_DRAWN'])} ብር ብድር (IDC ጨምሮ በግንባታ መጨረሻ {etb(A['PEAK_DEBT'])})፣ {pct(A['RATE_EFF'])} ወለድ፣ {A['TENOR_Y']} ዓመት →
-<b>ወርሃዊ ክፍያ {etb(A['LN_INSTAL_M'])} ብር</b>። በExcel፡ =PMT({pct(A['RATE_EFF'])}/12, {int(A['TENOR_Y']) * 12}, −{etb(A['PEAK_DEBT'])})። ጠቅላላ የሚከፈል ወለድ {etb(A['LN_INT_TOT'])} ብር ነው።</div>
-<h2>DSCR እንዴት ይነበባል?</h2>
-<p>በምሳሌ ለ ዝቅተኛው DSCR <b>{B['MIN_DSCR']:.2f}x</b>፣ አማካዩ {B['AVG_DSCR']:.2f}x ነው — ከባንኩ ገደብ {B['DSCR_COV']:.2f}x በላይ። DSCR ከገደቡ በታች ከወረደ ሞዴሉ ለባለአክሲዮኖች የሚከፈለውን
-የትርፍ ድርሻ በዚያ ዓመት ያግዳል (lock-up)፣ ማረጋገጫ C18 ደግሞ ማስጠንቀቂያ ያሳያል። <b>LLCR</b> (በቀሪው የብድር ዘመን የገንዘብ ፍሰት የአሁን ዋጋ ÷ የብድር ቀሪ) በመጀመሪያው የሥራ ዓመት
-{B['LLCR_O1']:.2f}x ነው።</p>
+    S.append(f"""<div class="page">
+<h2>ማን ይከፍላል? — ቁጠባ → ቤተሰብ → ብድር</h2>
+<p>በየወሩ የሚያስፈልገው ገንዘብ በመጀመሪያ ከቁጠባዎ፣ ሲያልቅ ከቤተሰብ መዋጮ፣ ከዚያም ከቤት ብድር ይወሰዳል። ሦስቱም ካልበቁ ቀሪው «ክፍተት» (funding gap) ይባላል።
+በናሙናው ቁጠባ {etb(P["P_SAV_USED"])}፣ የቤተሰብ መዋጮ {etb(P["P_FAM_USED"])} እና ብድር {etb(P["P_LOAN_DRAWN"])} ብር ጥቅም ላይ ውለዋል፤ ክፍተት የለም።
+የኮንትራክተሩ ማስያዣ ({etb(P["P_RET_TOT"])} ብር) በርክክብ ወር ይቀመጣል፣ ከጉድለት ማረሚያ ጊዜ በኋላ ይከፈላል።</p>
+<h2>በግንባታ ወቅት ወለድ</h2>
+<p>ብድር ከወጣበት ወር ጀምሮ ወለድ ይታሰባል፡ <span class="formula">ወለድ = (የወሩ መነሻ ቀሪ + የወሩ ብድር) × {pct(P["P_RATE"], 0)} ÷ 12</span>
+«Capitalised» ከመረጡ ወለዱ በብድሩ ላይ ይጨመራል (ናሙናው እንዲህ ነው፤ በግንባታ ወቅት በጠቅላላ {etb(P["P_IDC_TOT"])} ብር)፤
+«Paid monthly» ከመረጡ ከገቢዎ ይከፍሉታል — ሞዴሉ ከፍተኛውን ወርሃዊ መጠን ያሳያል። በግንባታው መጨረሻ የብድሩ ቀሪ <b>{etb(P["P_B0"])} ብር</b> ነው።</p>
+{fig("P_P2_Calc_2.png", "ምስል 5.2 — ድምሮች፣ የወጪ ክፍፍል፣ የኮንትራክተር ደረጃዎችና በወር የተዘረዘረው የብድር ሰንጠረዥ መጀመሪያ።", width=82, crop_=(0, 1, 0, 0.6))}
+<h2>የብድር ሰንጠረዡ (በወር፣ ወደ ታች)</h2>
+<p>ከግንባታው በኋላ ለእያንዳንዱ ወር አንድ ረድፍ አለ (እስከ 240 ወራት)። የእፎይታ ወራት ካሉ ወለድ ብቻ ይከፈላል፤ ከዚያ እኩል ወርሃዊ ክፍያ (annuity):
+<span class="formula">ወርሃዊ ክፍያ = PMT({pct(P["P_RATE"], 0)}/12, {P["P_NPAY"]}, −{etb(P["P_B0"])}) = {etb(P["P_INSTAL"])} ብር</span>
+የመጀመሪያው ወር፡ መነሻ {etb(a1[3])} · ወለድ {etb(a1[4])} · ክፍያ {etb(a1[5])} · ዋና ገንዘብ {etb(a1[6])} · ቀሪ {etb(a1[7])}።
+ሁለተኛው ወር ወለዱ ትንሽ ቀንሶ ({etb(a2[4])}) ዋናው ገንዘብ ይጨምራል ({etb(a2[6])})። ብድሩ በ{P["P_PAYOFF"]:%d/%m/%Y} ይጠናቀቃል።</p>
 </div>""")
-    # ------------------------------------------------------------------ CH7
-    S.append(f"""<div class="page">{chapter(7, "የፋይናንስ መግለጫዎች", "Reading the P&L, balance sheet and cash flow (sheets 40–42)", "CH07")}
-<p>ሦስቱ መግለጫዎች ለእያንዳንዱ ጊዜ (C1–C4፣ O1–O10) ይዘጋጃሉ። በIFRS መሠረት፡ የሚሸጡ ቤቶች <b>ለሽያጭ የተያዘ ንብረት (IAS 2)</b>፣ ለኪራይ የሚቀሩት
-<b>ለኪራይ የተያዘ ንብረት (IAS 40)</b>፣ ባለቤቱ የሚጠቀምበት <b>ንብረት (IAS 16)</b> ሆነው ይመዘገባሉ። ወጪው በተጣራ ስፋት መጠን ይከፋፈላል።</p>
-<h2>1. የትርፍና ኪሳራ መግለጫ (P&L)</h2>
-<p>ከላይ ገቢ (ሽያጭ፣ ኪራይ፣ የቁልፍ ገንዘብ፣ የአገልግሎት ክፍያ)፣ ከዚያ የተሸጡ ቤቶች ወጪ፣ የሥራ ማስኬጃ ወጪ፣ <b>EBITDA</b> (ከወለድ፣ ግብርና እርጅና በፊት ትርፍ)፣
-የእርጅና ቅናሽ፣ የወለድ ወጪ፣ ከግብር በፊት ትርፍ፣ ግብሮች፣ በመጨረሻ <b>ከግብር በኋላ ትርፍ</b>። የሽያጭ ገቢ የሚታወቀው በርክክብ ዓመት ስለሆነ በግንባታው የመጨረሻ ዓመት
-ትልቅ ገቢና ተመጣጣኝ የወጪ ልቀት ይታያል።</p>
-{fig("B_40_PL_1.png", "ምስል 7.1 — የትርፍና ኪሳራ መግለጫ (40 PL)፣ በሺህ ብር።",
-     [(1, 1, 21), (2, 1, 34), (3, 1, 41), (4, 1, 61.5), (5, 1, 74.5), (6, 1, 81)],
-     ["ገቢ በIFRS 15/16", "የተሸጡ ቤቶች ወጪ (ከክምችት የሚለቀቅ)", "የሥራ ማስኬጃ ወጪዎች", "EBITDA", "ከግብር በፊት ትርፍ", "ከግብር በኋላ ትርፍና ክፍፍል"], crop=(0, 1, 0, 1))}
-</div><div class="page">
-<h2>2. የሀብትና ዕዳ መግለጫ (Balance sheet)</h2>
-<p>በእያንዳንዱ ጊዜ መጨረሻ ያለውን ያሳያል፡ <b>ሀብት</b> (ሕንፃ፣ ክምችት፣ ተሰብሳቢ፣ ጥሬ ገንዘብ) = <b>ዕዳ</b> (ብድር፣ የሊዝ ዕዳ፣ ከደንበኞች ቅድሚያ፣ ግብር) + <b>የባለቤት ሀብት</b>
-(ካፒታል፣ ሕጋዊ መጠባበቂያ፣ ያልተከፋፈለ ትርፍ)። የመጨረሻው ረድፍ «Balance check» ሁልጊዜ ዜሮ መሆን አለበት።</p>
-{fig("B_41_BS_1.png", "ምስል 7.2 — የሀብትና ዕዳ መግለጫ (41 BS)።",
-     [(1, 1, 25.5), (2, 1, 34.5), (3, 1, 54.5), (4, 1, 68), (5, 1, 77.5), (6, 1, 93)],
-     ["ቋሚ ሀብት (IAS 40/16)", "ክምችት፣ ተሰብሳቢና ጥሬ ገንዘብ", "የባንክ ብድርና የሊዝ ዕዳ", "ከደንበኞች ቅድሚያ (IFRS 15)", "የባለቤት ሀብት", "የሚዛን ማረጋገጫ — ዜሮ"], width=100, crop=(0, 1, 0, 1))}
-</div><div class="page">
-<h2>3. የጥሬ ገንዘብ ፍሰት መግለጫ (IAS 7፣ ቀጥተኛ ያልሆነ ዘዴ)</h2>
-<p>ከግብር በፊት ትርፍ ተነስቶ ገንዘብ ያልሆኑ ነገሮች (የእርጅና ቅናሽ፣ የወጪ ልቀት) ይመለሳሉ፣ የሥራ ማስኬጃ ካፒታል ለውጦችና የተከፈለ ግብር ይቀነሳሉ → <b>ከሥራ እንቅስቃሴ</b>።
-ለኪራይ የሚቀረው ሕንፃ ወጪ <b>ከኢንቨስትመንት</b> ሥር፣ ካፒታል፣ ብድር፣ የብድር ክፍያና የትርፍ ድርሻ <b>ከፋይናንስ</b> ሥር ይመጣሉ። የመጨረሻው ጥሬ ገንዘብ በሀብትና ዕዳ መግለጫው ካለው ጋር
-እኩል መሆን አለበት (ማረጋገጫ C02)።</p>
-{fig("B_42_CF_1.png", "ምስል 7.3 — የጥሬ ገንዘብ ፍሰት መግለጫ (42 CF)።",
-     [(1, 1, 22.5), (2, 1, 49), (3, 1, 55.5), (4, 1, 78), (5, 1, 93.5)],
-     ["ከሥራ እንቅስቃሴ", "ከኢንቨስትመንት", "ከፋይናንስ፡ ካፒታል፣ ብድር፣ ክፍያዎች", "የትርፍ ድርሻና የካፒታል ተመላሽ", "የመጨረሻ ጥሬ ገንዘብ"], width=100, crop=(0, 1, 0, 1))}
-<div class="box"><b class="t">ለምን መመጣጠን አለባቸው?</b>እያንዳንዱ ብር ከአንድ ቦታ መጥቶ ወደ አንድ ቦታ ይሄዳል። ብድር ሲወጣ ጥሬ ገንዘብ ይጨምራል፣ ዕዳም ይጨምራል። ቤት ሲሸጥ ገቢ ትርፍን፣
-ጥሬ ገንዘብ ሀብትን ይጨምራል። ሦስቱ መግለጫዎች በዚህ መንገድ ስለተሳሰሩ አንዱ ቢሳሳት ሚዛኑ ይጠፋል — ስለዚህ ሚዛኑ የሞዴሉ ጤንነት ዋና ምልክት ነው።</div>
+    # ================================================================ CH6 – P3/P4
+    S.append(f"""<div class="page">{chapter(6, "የቤት ግምት ገጽና ማረጋገጫዎች (P3–P4)", "Private track – the one-page estimate and checks", "CH06", "ክፍል ሀ · የግል መኖሪያ ቤት")}
+<div class="two"><div style="flex:1.25">{fig("P_P3_Estimate_1.png", "ምስል 6.1 — P3 Estimate፡ በአንድ A4 ገጽ የሚታተም የቤት ግምት።", width=100)}</div>
+<div><h3 style="margin-top:2mm">አራቱ ካርዶች</h3>
+<p><b>የግንባታ ወጪ</b> {m(P["P_CONSTR"])} ሚሊዮን (ክልል {m(P["P_LOW"])}–{m(P["P_HIGH"])} ሚ.)፤ <b>ጠቅላላ ወጪ</b> {m(P["P_TOTAL"])} ሚ.
+(የብድር ክፍያና በግንባታ ወቅት ወለድ ጨምሮ)፤ <b>ወርሃዊ ክፍያ</b> {etb(P["P_INSTAL"])} ብር — የገቢውን {pct(P["P_DTI"], 0)}፤ <b>ክፍተት</b> የለም።</p>
+<h3>የወጪ ክፍፍል</h3><p>አሥር ክፍሎች ከመሠረት እስከ ብድር ወጪ፤ ድምራቸው ከጠቅላላው ወጪ ጋር እኩል ነው (ማረጋገጫ P02)።</p>
+<h3>ለኮንትራክተሩ ክፍያ</h3><p>ስድስት ደረጃዎች፣ የተጠራቀመ መቶኛና በግምት በስንተኛው ወር እንደሚደርሱ። ውል ሲደራደሩ ይጠቅማል።</p>
+<h3>የመክፈል አቅም</h3><p>(ወርሃዊ ክፍያ + ሌሎች ክፍያዎች) ÷ ገቢ። ከ{pct(P["P_AFF_MAX"], 0)} በታች «Affordable» (አረንጓዴ)፤ እስከ 25% በላይ «Stretch»፤ ከዚያ በላይ «Not affordable» (ቀይ)።
+ገቢዎ ሊሸከመው የሚችለው ከፍተኛ ብድርም ይታያል ({m(P["P_LOAN_AFF"])} ሚ.)።</p>
+<h3>ማከራየት</h3><p>ናሙናው 60 m² ቢያከራይ፡ የመጀመሪያው ዓመት ኪራይ {etb(P["P_RENT_Y1"])} ብር፣ ከወጪና ግብር በኋላ {etb(P["P_RENT_NET"])}፤
+የተከራየው ክፍል ወጪ በ{P["P_RENT_PB"]:.1f} ዓመታት ይመለሳል፤ ኪራዩ ወርሃዊ ክፍያውን {pct(P["P_RENT_COVER"], 0)} ይሸፍናል።</p></div></div>
 </div>""")
-    # ------------------------------------------------------------------ CH8
-    S.append(f"""<div class="page">{chapter(8, "ትርፋማነትና ተመላሽ", "Profitability and returns – NPV, IRR, MOIC, payback (sheets 50–51)", "CH08")}
-<p>የዕለት ተዕለት ምሳሌ እንውሰድ፡ ዛሬ 100 ብር ቢያበድሩ እና በዓመት 120 ብር ቢመለስልዎ ተመላሹ 20% ነው። ነገር ግን ዛሬ ያለ 100 ብር ከዓመት በኋላ ከሚገኝ 100 ብር ይበልጣል —
-ምክንያቱም ዛሬ ያለውን ገንዘብ በባንክ ማስቀመጥ ወይም በሌላ ሥራ ማዋል ይቻላል። የፕሮጀክት ትንተና ይህን የጊዜ ዋጋ ግምት ውስጥ ያስገባል።</p>
-<table><tr><th style="width:40mm">መለኪያ</th><th>በቀላል አማርኛ</th><th class="num" style="width:26mm">ምሳሌ ለ</th></tr>
-<tr><td><b>NPV</b> — የተጣራ የአሁን ዋጋ</td><td>ሁሉም የወደፊት ገቢና ወጪ በቅናሽ መጠን ወደ ዛሬ ዋጋ ተቀይሮ ሲደመር። ከዜሮ በላይ = ከሚጠበቀው ተመላሽ በላይ ያስገኛል።</td><td class="num">{m(B['PNPV'])} ሚ.</td></tr>
-<tr><td><b>IRR</b> — የውስጥ ተመላሽ መጠን</td><td>NPV ዜሮ የሚሆንበት ዓመታዊ ተመላሽ — «ገንዘቤ በዓመት ስንት በመቶ ያድጋል?»። ቀኖቹን በትክክል በመጠቀም (XIRR) ይሰላል።</td><td class="num">ፕሮጀክት {pct(B['PIRR'])}<br>ባለቤት {pct(B['EIRR'])}</td></tr>
-<tr><td><b>MOIC</b> — የካፒታል ብዜት</td><td>ባለቤቱ ያገኘው ጠቅላላ ገንዘብ ÷ ያዋጣው። 2.0x ማለት ገንዘቡ በእጥፍ ተመለሰ።</td><td class="num">{B['EMOIC']:.2f}x</td></tr>
-<tr><td><b>ትርፍ ከወጪ አንጻር</b></td><td>(GDV − TDC) ÷ TDC። GDV = የሚሸጡ ቤቶች ገቢ + የሚቀረው ንብረት ዋጋ (የተረጋጋ NOI ÷ ካፕ ሬት)።</td><td class="num">{pct(B['POC'])}</td></tr>
-<tr><td><b>የልማት ትርፍ ህዳግ</b></td><td>(GDV − TDC) ÷ GDV</td><td class="num">{pct(B['DEV_MARGIN'])}</td></tr>
-<tr><td><b>ከወጪ አንጻር ዓመታዊ ገቢ</b></td><td>የተረጋጋ NOI ÷ ለኪራይ የተያዘው ወጪ</td><td class="num">{pct(B['YOC'])}</td></tr>
-<tr><td><b>የመመለሻ ጊዜ</b></td><td>የተጠራቀመ ገንዘብ ፍሰት ዜሮ የሚያልፍበት ጊዜ (ከግንባታ መጀመሪያ፣ በዓመት ክፍልፋይ)። በቅናሽም ይሰላል።</td><td class="num">ፕሮጀክት {B['PB_P']:.1f} ዓ.<br>ባለቤት {B['PB_E']:.1f} ዓ.</td></tr></table>
-<div class="box"><b class="t">የፕሮጀክት እና የባለቤት ተመላሽ ልዩነት</b><b>የፕሮጀክት ገንዘብ ፍሰት</b> ብድርን ሳይጨምር ፕሮጀክቱ ራሱ የሚያስገኘውን ያሳያል (ከቅናሽ መጠን {pct(B['PIRR'] * 0 + 0.18, 0)} ጋር ይነጻጸራል)።
-<b>የባለቤት ገንዘብ ፍሰት</b> = − የተዋጣ ካፒታል + የትርፍ ድርሻና የካፒታል ተመላሽ + በ10ኛው ዓመት የባለቤቱ ድርሻ ዋጋ። ውሳኔው (VIABLE) በባለቤት IRR ከዝቅተኛ ተፈላጊ ተመላሽ ({pct(B['HURDLE'], 0)}) ጋር ይወሰናል።</div>
-{fig("B_50_Returns_1.png", "ምስል 8.1 — የተመላሽ ገጽ (50 Returns)።",
-     [(1, 1, 17.5), (2, 1, 29.5), (3, 1, 42), (4, 1, 61), (5, 1, 76)],
-     ["የመጨረሻ ዋጋ (Terminal value) በ10ኛው ዓመት", "የፕሮጀክት ገንዘብ ፍሰት", "የባለቤት ገንዘብ ፍሰት", "NPV፣ IRR፣ MOIC", "GDV፣ ትርፍ ከወጪና ውሳኔ"], width=100, crop=(0, 1, 0, 1))}
+    S.append(f"""<div class="page">
+<h2>P4 Checks — የግል ቤት ማረጋገጫዎች</h2>
+{fig("P_P4_Checks_1.png", f"ምስል 6.2 — {P['PCHK_PASS']} / {P['PCHK_TOTAL']} ማረጋገጫዎች PASS። ስህተቶች (Error) ሁልጊዜ PASS መሆን አለባቸው፤ ማስጠንቀቂያዎች (Warning) ምክር ናቸው።",
+     width=90, crop_=(0, 1, 0, 0.62))}
+<table><tr><th>ማረጋገጫ</th><th>ምን ይፈትሻል</th><th>ቢወድቅ</th></tr>
+<tr><td>P01–P04</td><td>ገንዘብ ገቢ = ወጪ በየወሩ፤ ክፍፍሉ ከጠቅላላው ጋር እኩል፤ የኮንትራክተር ደረጃዎች</td><td>ቀመር ተጽፎበታል — ከዋናው ፋይል ይቅዱ</td></tr>
+<tr><td>P05–P06</td><td>ብድሩ በጊዜው ተከፍሎ ያልቃል</td><td>የመክፈያ ጊዜውን ያስተካክሉ</td></tr>
+<tr><td>P07–P08</td><td>ምርጫዎቹ ትክክል ናቸው፤ በገጾቹ ላይ የቀመር ስህተት የለም</td><td>ዝርዝሩን እንደገና ይምረጡ</td></tr>
+<tr><td>P09 (W)</td><td>የሕንፃ ዓይነቱ ከፎቆቹ ጋር ይስማማል</td><td>በP1 ዓይነቱን ወይም ስፋቱን ያስተካክሉ</td></tr>
+<tr><td>P10 (W)</td><td>የገንዘብ ክፍተት የለም</td><td>ቁጠባ፣ መዋጮ ወይም ብድር ይጨምሩ፤ ወጪውን ይቀንሱ</td></tr>
+<tr><td>P11 (W)</td><td>ወርሃዊ ክፍያው በአቅምዎ ውስጥ ነው</td><td>ብድሩን ይቀንሱ ወይም የመክፈያ ጊዜውን ያራዝሙ</td></tr>
+<tr><td>P12 (W)</td><td>የሚከራየው ስፋት ከቤቱ አይበልጥም</td><td>ስፋቱን ያስተካክሉ</td></tr></table>
+<div class="box green"><b class="t">የግል ቤት — አምስት ደረጃዎች</b>1) Start፡ «Private residence» + «My house»። 2) P1 ዓምድ E ይሙሉ። 3) P4 ሁሉም PASS።
+4) P3 ያንብቡና ያትሙ። 5) የቤት ዕቃ፣ ማጠናቀቂያ ወይም የብድር ጊዜ ቀይረው ውጤቱን ያወዳድሩ።</div>
 </div>""")
-    # ------------------------------------------------------------------ CH9
-    sc = B["SC"]
-    S.append(f"""<div class="page">{chapter(9, "ስጋትና ትንተና", "Scenarios, flex cells, sensitivity, tornado and break-even (sheet 52)", "CH09")}
-<p>ባንክ ወይም ባለሀብት ፊት ከመቅረብዎ በፊት ፕሮጀክቱን «ይፈትኑት» (stress-test)፡ ነገሮች እንደታሰበው ባይሄዱስ? ሞዴሉ አራት መሣሪያዎች አሉት።</p>
-<h3>1. ሁኔታዎች (Scenarios)</h3>
-<p>በመጀመሪያ ገጽ ጥያቄ 3 ላይ ሁኔታውን ይቀይሩ። ሁሉም ውጤቶች ወዲያው ይቀየራሉ። የገጽ 52 «Scenario grid» አራቱንም ጎን ለጎን ያሳያል፡</p>
-<table><tr><th>ሁኔታ</th><th class="num">ባለቤት IRR</th><th class="num">ትርፍ ከወጪ</th><th class="num">ዝቅተኛ DSCR</th></tr>
-<tr><td>መሠረታዊ (Base)</td><td class="num">{pct(sc[1][0])}</td><td class="num">{pct(sc[1][1])}</td><td class="num">{sc[1][2]:.2f}x</td></tr>
-<tr><td>ብሩህ (Upside)</td><td class="num">{pct(sc[2][0])}</td><td class="num">{pct(sc[2][1])}</td><td class="num">{sc[2][2]:.2f}x</td></tr>
-<tr><td>አስቸጋሪ (Downside)</td><td class="num">{pct(sc[3][0])}</td><td class="num">{pct(sc[3][1])}</td><td class="num">{sc[3][2]:.2f}x</td></tr>
-<tr><td>የባንክ (Lender)</td><td class="num">{pct(sc[4][0])}</td><td class="num">{pct(sc[4][1])}</td><td class="num">{sc[4][2]:.2f}x</td></tr></table>
-<h3>2. የማስተካከያ ሕዋሶች (Flex cells)</h3>
-<p>በገጽ 52 ላይ ለሽያጭ ዋጋ፣ ለግንባታ ወጪ፣ ለኪራይ፣ ለተያዘ መጠን፣ ለወለድና ለሥራ ማስኬጃ ወጪ 100% የሆኑ ሕዋሶች አሉ። ለምሳሌ የሽያጭ ዋጋን 90% ቢያደርጉ
-ባለቤት IRR ከ{pct(B['EIRR'])} ወደ <b>{pct(B['EIRR_P90'])}</b> ይወርዳል። ተጨማሪ የግንባታ መዘግየትም በወር ማስገባት ይቻላል። ከሙከራ በኋላ ወደ 100% መመለስዎን አይርሱ!</p>
-<h3>3. የተጽዕኖ ሰንጠረዦችና ቶርኔዶ</h3>
-<p>የExcel «Data Tables» እያንዳንዱን ነጂ ከ−30% እስከ +30% ቀይረው ባለቤት IRR፣ ዝቅተኛ DSCR እና ትርፍ ከወጪን ያሳያሉ። ባለሁለት አቅጣጫ ሰንጠረዡ የሽያጭ ዋጋንና
-የግንባታ ወጪን አንድ ላይ ይቀይራል — አረንጓዴ ሕዋሶች ከዝቅተኛ ተፈላጊ ተመላሹ በላይ ናቸው። <b>ቶርኔዶ</b> ሰንጠረዡ የትኛው ነጂ ውጤቱን በብዛት እንደሚያናውጥ በቅደም ተከተል ያሳያል።</p>
-{fig("B_52_Sensitivity_1.png", "ምስል 9.1 — የስጋት ትንተና ገጽ (52)፡ የማስተካከያ ሕዋሶች፣ ውጤቶችና የመጀመሪያዎቹ ሰንጠረዦች።",
-     [(1, 49, 27), (2, 49, 51), (3, 37, 74)],
-     ["የማስተካከያ ሕዋሶች (ሰማያዊ)", "በቀጥታ የሚቀየሩ ውጤቶች", "ባለአንድ አቅጣጫ የተጽዕኖ ሰንጠረዥ (Data Table)"], width=80, crop=(0, 0.58, 0, 0.66))}
-</div><div class="page">
-<h3>4. የሚዛን ነጥብ (Break-even)</h3>
-<p>«ምን ያህል ቢበላሽ ነው ፕሮጀክቱ የሚወድቀው?» ሞዴሉ ለእያንዳንዱ ሁለት መልስ ይሰጣል፡ በቀመር የተሰላ ፈጣን ግምት (closed-form) እና በ21 ረድፍ የቀጥታ ፍለጋ ሰንጠረዥ
-(grid-refined) የተገኘ ትክክለኛ ዋጋ — goal seek ወይም ማክሮ ሳያስፈልግ።</p>
-<table><tr><th>የሚዛን ነጥብ</th><th class="num">ውጤት (ምሳሌ ለ)</th><th>ትርጉም</th></tr>
-<tr><td>የሽያጭ ዋጋ (NPV = 0)</td><td class="num">{etb(B['BE_PRICE_NPV'])} ብር/m²</td><td>የአሁኑ ዋጋ {etb(B['BLEND_PRICE'])} — ዋጋው እስከዚህ ቢወርድ ፕሮጀክቱ የቅናሽ መጠኑን ብቻ ያስገኛል</td></tr>
-<tr><td>የተያዘ መጠን (DSCR = ግዴታ)</td><td class="num">{pct(B['BE_OCC'])}</td><td>የተረጋጋው የኪራይ መያዝ ከዚህ በታች ቢወርድ የባንክ ግዴታ ይጣሳል</td></tr>
-<tr><td>ከፍተኛ የወጪ ጭማሪ (IRR &lt; hurdle)</td><td class="num">{pct(B['BE_COST'])}</td><td>ወጪው ከዚህ በላይ ቢጨምር ባለቤት IRR ከ{pct(B['HURDLE'], 0)} በታች ይወርዳል</td></tr>
-<tr><td>የወለድ መጠን (DSCR = ግዴታ)</td><td class="num">{pct(B['BE_RATE'])}</td><td>የአሁኑ {pct(B['RATE_EFF'])}</td></tr>
-<tr><td>ከፍተኛ መዘግየት (IRR &lt; hurdle)</td><td class="num">{(f"{B['BE_DELAY']:.1f} ወር") if B['BE_DELAY'] >= 0 else "ከፈተናው ክልል በላይ"}</td><td>ግንባታው ከዚህ በላይ ቢዘገይ ውሳኔው ይቀየራል</td></tr></table>
-{fig("B_52_Sensitivity_2.png", "ምስል 9.2 — ቶርኔዶና የሚዛን ነጥብ ሰንጠረዦች።",
-     [(1, 1.5, 7), (2, 1.5, 67)],
-     ["ቶርኔዶ፡ በእያንዳንዱ ነጂ የባለቤት IRR ለውጥ", "የሚዛን ነጥቦች፡ በቀመርና በፍለጋ ሰንጠረዥ"], width=96, crop=(0.46, 0.84, 0, 0.6))}
-<div class="box"><b class="t">ባንክ ፊት ከመቅረብዎ በፊት</b>የባንኩን ሁኔታ (Lender case) ይምረጡ፣ ዝቅተኛው DSCR ከገደቡ በላይ መሆኑን ያረጋግጡ፣ ቶርኔዶውን ያትሙ፣ እና «ዋጋው ቢቀንስ የምናደርገውን»
-(ለምሳሌ ተጨማሪ ቅድመ-ሽያጭ፣ ረዘም ያለ የብድር ዘመን) አስቀድመው ያቅዱ።</div>
+    # ================================================================ CH7 – inputs
+    S.append(f"""<div class="page">{chapter(7, "የፕሮጀክቱ ግብዓቶችና ሁኔታዎች (10, 11, 12)", "Commercial track – inputs, scenarios and the tax register", "CH07", "ክፍል ለ · የንግድ ፕሮጀክት")}
+<p>የንግድ ሞዴሉ ግብዓቶች በ11 ብሎኮች ተደራጅተዋል። የግል መረጃ (የቤተሰብ ገቢ፣ ቁጠባ፣ የቤት ብድር) የለበትም — እነዚያ በግል ቤት ክፍል ብቻ ናቸው።</p>
+{fig("C_10_Inputs_1.png", "ምስል 7.1 — 10 Inputs፡ E የእኔ ፕሮጀክት · F ምሳሌ 1 · G ምሳሌ 2 · H ACTIVE · K እርግጠኝነት · L ምንጭ/ቀን።",
+     [(1, 43, 9.5), (2, 60, 9.5), (3, 87, 9.5), (4, 94, 9.5)],
+     ["የእርስዎ ዓምድ (E)", "ACTIVE (H) — ሞዴሉ የሚጠቀመው", "እርግጠኝነት — High / Medium / Low", "ምንጭና ቀን (ለምሳሌ «BOQ ጥቅምት 2026»)"],
+     width=100, crop_=(0.05, 0.62, 0, 1))}
+<table><tr><th style="width:30%">ብሎክ</th><th>ይዘት</th></tr>
+<tr><td>1–2 ፕሮጀክትና ፎቆች</td><td>ስም፣ ቦታ፣ FAR፣ ቀን፣ ወራት፣ ማጠናቀቂያ፤ ለ16 ወለሎች ጠቅላላ ስፋት (የተጣራ ስፋት በገጽ 13 ነው)</td></tr>
+<tr><td>3 የግንባታ ወጪ</td><td>ለ9 የሥራ ክፍሎች «Rate x area» ወይም «Lump sum (BOQ)»፣ ተጨማሪ ሥራዎች፣ መጠባበቂያ፣ ዲዛይን፣ ቁጥጥር፣ <b>የልዩ ባለሙያ አማካሪ</b>፣ ፈቃድ፣ FF&amp;E፣ <b>ከመክፈቻ በፊት ወጪ</b>፣ የዋጋ ጭማሪ፣ S-ኩርባ፣ ማስያዣ</td></tr>
+<tr><td>4 መሬት</td><td>ሊዝ (በጥሬ ገንዘብ)፣ የራስ መሬት፣ ወይም <b>በአጋርነት የሚገባ መሬት (NCI)</b> — ለምሳሌ ከከተማ አስተዳደር ጋር በPPP</td></tr>
+<tr><td>5 ሽያጭ</td><td>የዋጋ ጭማሪ፣ ቅድመ-ሽያጭ በዓመት፣ ከግንባታ በኋላ የሽያጭ ፍጥነት፣ የክፍያ ዕቅድ፣ ኮሚሽን፣ IFRS 15 ፖሊሲ</td></tr>
+<tr><td>6 ኪራይ</td><td>የመሙላት ፍጥነት (O1/O2)፣ የኪራይ ጭማሪ፣ የቁልፍ ገንዘብ፣ የአገልግሎት ክፍያ፣ የመኖሪያ ኪራይ ከተ.እ.ታ ነፃ መሆኑ</td></tr>
+<tr><td>7 ሆቴል</td><td>ክፍሎች፣ አማካይ የቀን ዋጋ (ADR)፣ ይዞታ፣ የምግብና ሌላ ገቢ፣ ከገቢ የሚሰላ ኪራይ፣ ዝቅተኛ ዋስትና ኪራይ</td></tr>
+<tr><td>8 ሌሎች ገቢዎች</td><td>አራት ስም ያላቸው ገቢዎች (ማስታወቂያ፣ የቴሌኮም ጣሪያ፣ ኤግዚቢሽን፣ የጎብኚ መኪና ማቆሚያ…) እና ጭማሪያቸው</td></tr>
+<tr><td>9–11</td><td>የሥራ ማስኬጃ ወጪ፤ ፋይናንስ (የባለቤት ድርሻ፣ የብድር ተጨማሪ ለክፍያዎች፣ ወለድ፣ የእፎይታ ጊዜ፣ ዘመን፣ DSRA፣ cash sweep፣ DSCR ግዴታ)፤ ግብር፣ ሂሳብና ግምገማ</td></tr></table>
 </div>""")
-    # ------------------------------------------------------------------ CH10
-    S.append(f"""<div class="page">{chapter(10, "ዳሽቦርድ", "The dashboard – one page for decision makers (sheet 01)", "CH10")}
-<p>ዳሽቦርዱ ሁሉንም በአንድ A4 ገጽ (አግድም) ያሳያል። ከላይ ወደ ታች ያንብቡት፡</p>
-{fig("B_01_Dashboard_1.png", "ምስል 10.1 — ዳሽቦርድ (ምሳሌ ለ፣ መሠረታዊ ሁኔታ)።",
-     [(1, 1.5, 11.5), (2, 57, 11.5), (3, 1.5, 17), (4, 50.5, 17), (5, 83.5, 17), (6, 1.5, 29.7), (7, 1.5, 55.6), (8, 67, 55.6), (9, 1.5, 81), (10, 50.5, 81)],
-     ["የሁኔታ መስመር፡ ሁኔታ፣ ማረጋገጫዎች፣ ዓይነት", "ውሳኔ፡ VIABLE / MARGINAL / NOT VIABLE", "ጠቅላላ የልማት ወጪ (TDC)",
-      "ባለቤት IRR ከhurdle ጋር", "ዝቅተኛ DSCR ከግዴታው ጋር", "የገንዘብ ፍሰትና ድምሩ", "የገቢ ድብልቅ", "ቶርኔዶ", "የገንዘብ ምንጮችና አጠቃቀም", "ማስጠንቀቂያዎች"], crop=(0, 1, 0, 1))}
-<h2>ውሳኔው እንዴት ይወሰናል?</h2>
-<table><tr><th>ውሳኔ</th><th>ሁኔታ</th></tr>
-<tr><td style="color:#2E7D4F;font-weight:700">VIABLE · አዋጭ</td><td>ባለቤት IRR ≥ ዝቅተኛ ተፈላጊ ተመላሽ <b>እና</b> ትርፍ ከወጪ &gt; 0 <b>እና</b> DSCR ≥ ግዴታ (ብድር ካለ)</td></tr>
-<tr><td style="color:#B7791F;font-weight:700">MARGINAL · በድንበር ላይ</td><td>ባለቤት IRR ከhurdle እስከ {pct(0.03, 0)} በታች ነው (ክልሉ በግብዓት ይቀየራል) እና GDV ≥ TDC</td></tr>
-<tr><td style="color:#B42318;font-weight:700">NOT VIABLE · አዋጭ አይደለም</td><td>ከላይ ያሉት ካልተሟሉ</td></tr></table>
-<p>ስድስቱ የቁልፍ ውጤት ሳጥኖች፡ ጠቅላላ የልማት ወጪ፣ GDV፣ ትርፍ ከወጪ፣ ባለቤት IRR፣ ከፍተኛ ብድር፣ ዝቅተኛ DSCR። በዓይነት 0 እነዚህ ሳጥኖች ወደ ቤት መረጃ ይቀየራሉ፡
-ጠቅላላ ወጪ፣ ዋጋ በካሬ፣ ወርሃዊ ክፍያ፣ የገንዘብ ክፍተት፣ የወጣ ብድርና የመክፈል አቅም።</p>
+    S.append(f"""<div class="page">
+<h2>እርግጠኝነትና ምንጭ</h2>
+<p>ለእያንዳንዱ ግብዓት በዓምድ K «High / Medium / Low» ይምረጡ፤ በዓምድ L ምንጩን ይጻፉ። «Low» የተባሉት ቁጥር ተቆጥሮ በዳሽቦርዱ ማስጠንቀቂያና ማጠቃለያ ላይ ይታያል
+(በምሳሌዎቹ {C["N_LOWCONF"]} ግብዓቶች — ለምሳሌ የሆቴል ADR እና የመውጫ ካፕ ሬት — «Low» ተደርገዋል)። ከባንክ ጋር ከመነጋገርዎ በፊት እነዚህን በገበያ ጥናት ያጠናክሩ።</p>
+{fig("H_10_Inputs_2.png", "ምስል 7.2 — ብሎክ 6–8፡ የመሙላት ፍጥነት፣ የሆቴል ኦፕሬተር ኪራይና አራቱ ሌሎች ገቢዎች (ምሳሌ 2)።", width=100, crop_=(0.39, 0.75, 0, 1))}
+<h2>ሁኔታዎች (11 Scenarios)</h2>
+<p>አራት ሁኔታዎች አሉ — <b>Base</b> (እንደ ግብዓቱ)፣ <b>Upside</b>፣ <b>Downside</b> እና <b>Lender case</b>። እያንዳንዱ 15 ነጂዎችን ያስተካክላል
+(ዋጋ፣ ኪራይ፣ ይዞታ፣ ወጪ፣ መዘግየት፣ ወለድ፣ ቅድመ-ሽያጭ፣ ካፕ ሬት…)። በመጀመሪያ ገጽ «Scenario» ሲቀይሩ ሙሉ ሞዴሉ ይሰላል፤ ንቁው ዓምድ በብርቱካናማ ይደምቃል።</p>
+<h2>የግብር ሕግ መዝገብ (12 TaxLaw)</h2>
+<p>CIT 30%፣ የሕንፃ የግብር እርጅና 5%፣ ኪሳራ 5 ዓመት፣ ተ.እ.ታ 15%፣ ያልተከፋፈለ ትርፍ ግብር 10%፣ የትርፍ ድርሻ ግብር 10%፣ ሕጋዊ መጠባበቂያ 5%፣ የንብረት ግብር፣ የሊዝ ሁኔታዎች —
+ከአዋጁ ምንጭ ጋር። የኪራይ ተ.እ.ታ ድርሻ አሁን ከኪራይ መዝገቡ ይሰላል (የመኖሪያ ኪራይ ነፃ ከሆነ ይቀነሳል)።
+<b>ከመጠቀምዎ በፊት ሁሉንም መጣኔዎች ያረጋግጡ።</b></p>
 </div>""")
-    # ------------------------------------------------------------------ CH11
-    checks = [("C01", "የሀብትና ዕዳ መግለጫ በየዓመቱ ይመጣጠናል", "በጥቁር ሕዋስ ላይ ተጽፏል — Ctrl+Z ወይም አዲስ ቅጂ"),
-              ("C02", "የገንዘብ ፍሰት መጨረሻ = የሀብትና ዕዳ ጥሬ ገንዘብ", "እንደ C01"),
-              ("C03", "የገንዘብ ምንጮች = አጠቃቀሞች (ወርሃዊ)", "እንደ C01"),
-              ("C04", "TDC = ወርሃዊ የወጪ ክምችት", "እንደ C01"),
-              ("C05", "ወጪው በIAS 2/40/16 ሙሉ በሙሉ ተከፋፍሏል", "የተጣራ ስፋትና የሚሸጠውን ድርሻ ይፈትሹ"),
-              ("C06", "ብድሩ በዘመኑ ውስጥ ተከፍሎ ያልቃል", "የብድር ዘመኑን ያራዝሙ ወይም እፎይታውን ያሳጥሩ"),
-              ("C07", "የተከፈለ ዋና = የወጣ ብድር + የተደመረ ወለድ", "እንደ C01"),
-              ("C08", "ክምችቱ በመጨረሻ ሽያጭ ያልቃል", "የሽያጭ ፍጥነት (ብሎክ 6) ይፈትሹ"),
-              ("C09", "ከደንበኞች ቅድሚያ ወደ ዜሮ ይመለሳል", "የክፍያ ዕቅዱን ይፈትሹ"),
-              ("C10", "መሬት የእርጅና ቅናሽ አይደረግበትም", "እንደ C01"),
-              ("C11", "የፎቅ ስፋት = የአገልግሎት ስፋት", "ለእያንዳንዱ ፎቅ አገልግሎት ይምረጡ"),
-              ("C12", "የግብር ኪሳራ አሉታዊ አይሆንም", "እንደ C01"),
-              ("C13", "የምርጫ ሕዋሶች ትክክል ናቸው", "በመጀመሪያ ገጽ ከዝርዝሩ ይምረጡ"),
-              ("C14", "በየትኛውም ገጽ የቀመር ስህተት የለም (#REF፣ #DIV/0…)", "የስህተቱን ሕዋስ ያግኙ፣ ግብዓቱን ያስተካክሉ"),
-              ("C15", "የክፍያ ዕቅድና ቅድመ-ሽያጭ ≤ 100%", "መቶኛዎቹን ይቀንሱ"),
-              ("C16", "የቤት ግምት = የንግድ ሞዴሉ ወጪ", "F9 ይጫኑ"),
-              ("C17", "የተ.እ.ታ ሂሳብ ይቀጥላል", "እንደ C01"),
-              ("C18", "DSCR ≥ ግዴታ (ማስጠንቀቂያ)", "ብድሩን ይቀንሱ፣ ዘመኑን ያራዝሙ"),
-              ("C19", "ጥሬ ገንዘብ ከዝቅተኛው በታች አይወርድም (ማስጠንቀቂያ)", "ካፒታል ይጨምሩ ወይም የትርፍ ክፍፍል ይቀንሱ"),
-              ("C20", "የገንዘብ ክፍተት = 0 (ማስጠንቀቂያ)", "ተጨማሪ ቁጠባ፣ ብድር ወይም ቅድመ-ሽያጭ"),
-              ("C21", "FAR በተፈቀደው ውስጥ ነው (ማስጠንቀቂያ)", "ፎቆችን ይቀንሱ ወይም ፈቃዱን ያረጋግጡ"),
-              ("C22", "የሕንፃ ዓይነት ከፎቆቹ ጋር ይስማማል (ማስጠንቀቂያ)", "ብሎክ 2 ወይም ብሎክ 3ን ያስተካክሉ"),
-              ("C23", "የንብረት ዋጋ መቀነስ ምልክት የለም (ማስጠንቀቂያ)", "ኪራዩንና የመውጫ ካፕ ሬቱን ይፈትሹ")]
-    crow = "".join(f"<tr><td><b>{a}</b></td><td>{b_}</td><td>{c}</td></tr>" for a, b_, c in checks)
-    S.append(f"""<div class="page">{chapter(11, "ቼኮች", "Checks – what each one means and how to fix it (sheet 60)", "CH11")}
-<p>ሞዴሉ 23 ራስ-ሰር ማረጋገጫዎች አሉት። <b>Error</b> ዓይነቶቹ ሁልጊዜ PASS መሆን አለባቸው — FAIL ካለ ውጤቱን አይጠቀሙ። <b>Warning</b> ዓይነቶቹ የሞዴል ስህተት ሳይሆኑ
-የፕሮጀክቱ ስጋት ምልክቶች ናቸው (ለምሳሌ የገንዘብ ክፍተት)። ድምሩ በመጀመሪያ ገጽና በዳሽቦርዱ ላይ ይታያል (ምሳሌ ለ፡ {B['CHK_PASS']} / {B['CHK_TOTAL']})።</p>
-<table><tr><th style="width:12mm">ቁጥር</th><th>ምን ይፈትሻል</th><th style="width:62mm">ቢወድቅ ምን ያደርጋሉ</th></tr>{crow}</table>
-</div><div class="page">
-{fig("B_60_Checks_1.png", "ምስል 11.1 — የማረጋገጫ ገጽ (60 Checks)።",
-     [(1, 1.9, 26), (2, 52.5, 26), (3, 85, 26), (4, 1.9, 82)],
-     ["የማረጋገጫው ስምና ቁጥር", "ዓይነት፡ Error ወይም Warning", "PASS / WARN / FAIL", "ድምርና አጠቃላይ ሁኔታ"], width=88, crop=(0, 1, 0, 0.8))}
-<div class="box green"><b class="t">የተለመዱ ስህተቶችና መፍትሄዎቻቸው</b>
-• <b>ሁሉም ቁጥሮች ዜሮ ናቸው</b> — ጥያቄ 2 «My project» ሆኖ ዓምድ E ባዶ ነው፤ ወይም ቁጥሮቹን በF/G ዓምድ ጽፈዋል።<br>
-• <b>C06 ወደቀ</b> — የብድር ዘመኑ ለክፍያው አጭር ነው፤ የብድር ዘመኑን ይጨምሩ።<br>
-• <b>C20 ማስጠንቀቂያ</b> — ቁጠባ + ቤተሰብ + ብድር ከወጪው ያንሳል፤ የቤት ግምት ገጹ ክፍተቱን በብር ያሳያል።<br>
-• <b>C22 ማስጠንቀቂያ</b> — «G+1» መርጠው ሦስት ፎቅ አስገብተዋል።<br>
-• <b>የስጋት ሰንጠረዦች አይቀየሩም</b> — F9 ይጫኑ (ስሌት «Automatic except tables» ከሆነ)።</div>
+    # ================================================================ CH8 – spaces
+    S.append(f"""<div class="page">{chapter(8, "የቦታ ዝርዝርና የኪራይ መዝገብ (13 Spaces)", "Commercial track – space schedule and rent roll", "CH08", "ክፍል ለ · የንግድ ፕሮጀክት")}
+<p>የሕንፃው የሚሸጥ ወይም የሚከራይ እያንዳንዱ ቦታ በአንድ ረድፍ ይገባል — እስከ 12 ቦታዎች። ሦስት የመረጃ ብሎኮች (የእኔ ፕሮጀክት፣ ምሳሌ 1፣ ምሳሌ 2) እና
+ሞዴሉ የሚጠቀመው <b>ACTIVE</b> ብሎክ አሉ።</p>
+{fig("H_13_Spaces_1.png", "ምስል 8.1 — 13 Spaces፡ ምሳሌ 2 — ሱቆች፣ ማሳያዎች፣ ምግብ ቤት፣ ቢሮዎች፣ ሆቴል፣ የባለቤት ቢሮ፣ የከተማ አገልግሎት፣ መኪና ማቆሚያና መጋዘን።",
+     width=100, crop_=(0.52, 1, 0, 0.52))}
+<table><tr><th>ዓምድ</th><th>ትርጉም</th></tr>
+<tr><td>Type (ዝርዝር)</td><td>Retail · Office · Residential · Showroom/wholesale · Food &amp; beverage · Warehouse · <b>Hotel (operator lease)</b> · Parking · <b>Owner-occupied</b> · <b>Rent-free / public service</b> · Other</td></tr>
+<tr><td>Net area m²</td><td>የሚከራይ/የሚሸጥ የተጣራ ስፋት። ድምሩ ከጠቅላላው የወለል ስፋት መብለጥ የለበትም (C11)፤ ጥምርታው 50–95% መሆን አለበት (C22)</td></tr>
+<tr><td>Sold % (Mixed)</td><td>በዓይነት 3 (ቅይጥ) የሚሸጠው ድርሻ። ዓይነት 1 ሁሉንም የሚሸጥ ቦታ ይሸጣል፤ ዓይነት 2 ምንም አይሸጥም</td></tr>
+<tr><td>Sale price · Rent · Occupancy</td><td>የዛሬ የሽያጭ ዋጋ በm²፣ ወርሃዊ ኪራይ በm²፣ የተረጋጋ የተያዘ መጠን</td></tr></table>
+<div class="box"><b class="t">ልዩ ዓይነቶች</b><b>ሆቴል</b> አይሸጥም፤ ገቢው ከብሎክ 7 ይሰላል። <b>የባለቤት ቢሮና ያለ ኪራይ ቦታ</b> አይሸጡም አይከራዩም — እንደ IAS 16 ንብረት ይያዛሉ።
+የተቀረው ወጪ በተጣራ ስፋት ይከፋፈላል፡ የሚሸጠው → ክምችት (IAS 2)፣ የሚከራየው → የኢንቨስትመንት ንብረት (IAS 40)፣ የባለቤቱ → IAS 16።</div>
 </div>""")
-    # ------------------------------------------------------------------ CH12A
-    S.append(f"""<div class="page">{chapter("12ሀ", "ምሳሌ ሀ፡ የግል ቤት ወጪ ግምት", "Sample A – G+1 family house, end to end in about 10 minutes", "CH12A")}
-<p><b>ሁኔታው፡</b> አንድ ቤተሰብ በአዲስ አበባ ቦሌ ክፍለ ከተማ በ300 m² ቦታ ላይ G+1 መኖሪያ ቤት መሥራት ይፈልጋል (ምድር ወለል 130 m²፣ አንደኛ ፎቅ 120 m²፣ ጠቅላላ 250 m²)።
-የማጠናቀቂያ ደረጃ «Standard»፣ ግንባታው 14 ወር። ቦታው የራሳቸው ስለሆነ የመሬት ወጪ የለም። ገንዘቡ፡ ቁጠባ {etb(A['SAVINGS'])}፣ የቤተሰብና ዳያስፖራ መዋጮ {etb(A['FAMILY'])}፣
-የቤት ብድር እስከ {etb(A['HOME_LOAN'])} ብር ({pct(A['RATE_EFF'])}፣ {A['TENOR_Y']} ዓመት)። የቤተሰቡ ወርሃዊ ገቢ {etb(A['HH_INCOME'])} ብር ነው።</p>
-<h3>ደረጃዎች</h3>
-<p><b>1.</b> በመጀመሪያ ገጽ ጥያቄ 1 = «0 – Personal residence»፣ ጥያቄ 2 = «2 – SAMPLE A»። <b>2.</b> በገጽ 10 ብሎክ 2 ያሉትን (የሕንፃ ዓይነት G+1፣ Standard፣ ገቢ፣ ቁጠባ፣ ብድር) ይመልከቱ።
-<b>3.</b> ብሎክ 3 የፎቅ ስፋቶችን፣ ብሎክ 4 አጥር (70 ሜ.)፣ የፍሳሽ ጉድጓድ፣ ሁለት ታንከርና 80 m² ንጣፍ ያሳያሉ። <b>4.</b> «Home Estimate» ገጹን ይክፈቱ።</p>
-<div class="kpi"><div>የግንባታ ወጪ<b>{etb(A['CONSTR_COST'])}</b>ብር</div><div>ዋጋ በካሬ<b>{etb(A['CC_M2'])}</b>ብር/m²</div>
-<div>ወርሃዊ ክፍያ<b>{etb(A['LN_INSTAL_M'])}</b>{pct(A['AFFORD_PCT'], 0)} የገቢ</div><div>የገንዘብ ክፍተት<b>{etb(A['FUND_GAP'])}</b>ብር</div></div>
-{fig("A_02_Home_1.png", "ምስል 12.1 — የቤት ግምት ገጽ (ምሳሌ ሀ)። በአንድ A4 ገጽ ይታተማል።",
-     [(1, 3, 15.6), (2, 57, 15.6), (3, 3, 24.3), (4, 57, 24.3), (5, 3, 46.7), (6, 57, 46.7), (7, 3, 62.6), (8, 57, 62.6), (9, 3, 83.4)],
-     ["የግንባታ ወጪና ከዝቅተኛ እስከ ከፍተኛ ክልል", "ወርሃዊ ክፍያና የገንዘብ ክፍተት", "የወጪ ክፍፍል በክፍል", "የወጪ ክፍፍል ሰንጠረዥ",
-      "ለኮንትራክተሩ የክፍያ ደረጃዎችና ወራቸው", "ወርሃዊ የሚያስፈልግ ገንዘብ (S-ኩርባ)", "ገንዘብ፣ ብድርና የመክፈል አቅም", "የቤት ብድር ሰንጠረዥ በዓመት",
-      "ከፊሉን የማከራየት አማራጭ"], width=72, crop=(0, 1, 0, 1))}
-</div><div class="page">
-<h3>ውጤቱን ማንበብ</h3>
-<p>የግንባታ ወጪው (መሬትና የብድር ወጪ ሳይጨምር) <b>{etb(A['CONSTR_COST'])} ብር</b> ነው — ከ{m(A['CONSTR_COST'] * (1 + A['EST_LOW']))} እስከ {m(A['CONSTR_COST'] * (1 + A['EST_HIGH']))} ሚሊዮን ብር ክልል
-(−10% / +15%)። ይህ በካሬ <b>{etb(A['CC_M2'])} ብር</b> ማለት ነው። የበጀት ቀን ቀጥተኛ ወጪ {etb(A['HARD_BASE'])} ብር ሲሆን በ14 ወራት የዋጋ ጭማሪና 10% መጠባበቂያ
-{etb(A['ESC_AMT'] + A['CONT_TOT'])} ብር ይጨምራሉ። የብድር ወጪን (የማመቻቻ ክፍያና IDC {etb(A['IDC_TOT'])}) ጨምሮ ጠቅላላ የፕሮጀክት ወጪ <b>{etb(A['HOME_TOTAL'])} ብር</b> ነው።</p>
-<p><b>የክፍያ ደረጃዎች፡</b> ገጹ ለኮንትራክተሩ የሚከፈለውን በስድስት ደረጃዎች (ቅድመ-ዝግጅት፣ መሠረት፣ ፍሬም፣ ግድግዳና ጣሪያ፣ ኤሌክትሪክና ቧንቧ፣ ማጠናቀቂያ) እና ግምታዊ ወራቸውን ያሳያል — ውል ሲደራደሩ ይጠቅማል።
-5% የማስያዣ ገንዘብ ({etb(A['RET_TOT'])} ብር) ከግንባታ በኋላ ይለቀቃል።</p>
-<p><b>ብድሩ፡</b> ቁጠባውና የቤተሰብ መዋጮው መጀመሪያ ስለሚወጡ ብድሩ የሚወሰደው በግንባታው መጨረሻ ወራት ብቻ ነው — ስለዚህ IDC አነስተኛ ነው። የወጣው ብድር {etb(A['DEBT_DRAWN'])} ብር፣
-ወርሃዊ ክፍያው <b>{etb(A['LN_INSTAL_M'])} ብር</b> ሲሆን ከገቢው {pct(A['AFFORD_PCT'])} ነው — ከ35% ገደብ በታች ስለሆነ «Affordable · ይቻላል» ይላል። ብድሩ {A['LN_FINAL_DATE']:%B %Y} ተከፍሎ ያልቃል።</p>
-<h2>«የPremium ማጠናቀቂያ ብመርጥስ?»</h2>
-<p>በብሎክ 2 «Finish level»ን ወደ <b>Premium</b> ይቀይሩ። የማጠናቀቂያ፣ የውስጥ ሥራና የኤሌክትሪክ ዋጋዎች ይጨምራሉ፡</p>
-<table><tr><th></th><th class="num">Standard</th><th class="num">Premium</th><th class="num">ልዩነት</th></tr>
-<tr><td>የግንባታ ወጪ</td><td class="num">{etb(A['CONSTR_COST'])}</td><td class="num">{etb(Ap['CONSTR_COST'])}</td><td class="num">+{pct(Ap['CONSTR_COST'] / A['CONSTR_COST'] - 1)}</td></tr>
-<tr><td>ዋጋ በካሬ</td><td class="num">{etb(A['CC_M2'])}</td><td class="num">{etb(Ap['CC_M2'])}</td><td class="num">+{etb(Ap['CC_M2'] - A['CC_M2'])}</td></tr>
-<tr><td>ወርሃዊ ክፍያ</td><td class="num">{etb(A['LN_INSTAL_M'])}</td><td class="num">{etb(Ap['LN_INSTAL_M'])}</td><td class="num">+{etb(Ap['LN_INSTAL_M'] - A['LN_INSTAL_M'])}</td></tr>
-<tr><td>የገንዘብ ክፍተት</td><td class="num">{etb(A['FUND_GAP'])}</td><td class="num">{etb(Ap['FUND_GAP'])}</td><td class="num">ማስጠንቀቂያ C20</td></tr></table>
-<p>የቤት ብድሩ ጣሪያ {etb(A['HOME_LOAN'])} ብር ስለሆነ ተጨማሪው ወጪ <b>{etb(Ap['FUND_GAP'])} ብር የገንዘብ ክፍተት</b> ይፈጥራል — የዳሽቦርዱና የቤት ግምቱ ገጽ በቀይ ያሳያሉ።
-መፍትሄ፡ ቁጠባ መጨመር፣ ከፍ ያለ ብድር መጠየቅ ወይም Premium የሚሆነውን ክፍል (ለምሳሌ ኩሽናና መታጠቢያ ብቻ) መወሰን።</p>
-{fig("Ap_02_Home_1.png", "ምስል 12.2 — ተመሳሳይ ቤት በPremium ማጠናቀቂያ፡ የወጪ ጭማሪና የገንዘብ ክፍተት።", [(1, 77, 62)], ["የገንዘብ ክፍተት ታየ"], width=90, crop=(0, 0.235, 0, 1))}
+    S.append(f"""<div class="page">
+<h2>ኪራዩ እንዴት ይሰላል?</h2>
+<p>ለእያንዳንዱ ቦታ፡ <span class="formula">ሙሉ ኪራይ በዓመት = የሚከራይ m² × ወርሃዊ ኪራይ × 12</span> ከዚያ ሞዴሉ የኪራይ-ክብደት ያለውን
+የተረጋጋ ይዞታ ያሰላል (ምሳሌ 2፡ {pct(H["OCC_STAB"])})። በመጀመሪያዎቹ ሁለት ዓመታት ተከራዮች ቀስ በቀስ ስለሚገቡ ይዞታው በ«lease-up» መጠን ይባዛል
+(ምሳሌ 2፡ O1 70%፣ O2 90%፣ ከO3 ጀምሮ 100%)። ኪራዩ በዓመት 8% ያድጋል።</p>
+<h2>የሆቴል ኦፕሬተር ኪራይ</h2>
+<p>ሆቴሉን ኦፕሬተር ያስተዳድረዋል፤ ባለቤቱ ከሆቴሉ ጠቅላላ ገቢ መቶኛ ወይም ዝቅተኛ ዋስትና ኪራይ — ከፍ ያለውን — ያገኛል፡
+<span class="formula">የክፍል ገቢ = ክፍሎች × 365 × ይዞታ × ADR ;  ጠቅላላ = የክፍል ገቢ × (1 + የምግብና ሌላ %) ;  ኪራይ = MAX(18% × ጠቅላላ, ዝቅተኛ ዋስትና)</span>
+በምሳሌ 2 (85 ክፍሎች፣ ADR 12,000 ብር፣ 65% ይዞታ) በዛሬ ዋጋ የተረጋጋው የሆቴል ኪራይ <b>{m(H["HOTEL_RENT_TODAY"])} ሚሊዮን ብር</b> ነው —
+ከቦታዎቹ ኪራይ ({m(H["GPR_TODAY"])} ሚ.) ጋር ሲነጻጸር ትልቅ ድርሻ። የሆቴል ወጪዎችን ኦፕሬተሩ ስለሚሸፍን የንብረት ወጪ % የሚሰላው በቦታዎቹ ኪራይ ላይ ብቻ ነው።</p>
+{fig("H_24_Revenue_1.png", "ምስል 8.2 — 24 Revenue፡ የቦታዎች ኪራይ፣ የሆቴል ብሎክና አራቱ ሌሎች ገቢዎች (ምሳሌ 2)።", width=100, crop_=(0.36, 1, 0, 1))}
 </div>""")
-    # ------------------------------------------------------------------ CH12B
-    S.append(f"""<div class="page">{chapter("12ለ", "ምሳሌ ለ፡ የንግድ ፕሮጀክት ትርፋማነት", "Sample B – B+G+8 mixed-use building, end to end, plus three what-if exercises", "CH12B")}
-<p><b>ሁኔታው፡</b> በአዲስ አበባ ቂርቆስ ክፍለ ከተማ በ1,000 m² የሊዝ ቦታ ላይ B+G+8 ቅይጥ ሕንፃ (ጠቅላላ {etb(B['GFA'])} m²)። ምድር ቤት — መኪና ማቆሚያ፣ ምድርና አንደኛ ፎቅ — ሱቆች
-(ለኪራይ ይቀራሉ፣ {etb(B['LET_AREA'])} m² ተከራይ)፣ ከ2ኛ እስከ 8ኛ ፎቅ — አፓርትመንቶች (ለሽያጭ፣ {etb(B['SALE_AREA'])} m²)። ዓይነት 3 (ቅይጥ)፣ {B['CONSTR_EFF']} ወር ግንባታ፣ የባንክ ብድር
-ከ12 ወር እፎይታ ጋር። መሬቱ 150 ሚሊዮን ብር ሊዝ (10% ቅድመ ክፍያ፣ 30 ዓመት)።</p>
-<h3>ደረጃዎች</h3>
-<p><b>1.</b> ጥያቄ 1 = «3 – Mixed»፣ ጥያቄ 2 = «3 – SAMPLE B»። <b>2.</b> ማረጋገጫዎቹ {B['CHK_PASS']}/{B['CHK_TOTAL']} መሆናቸውን ይመልከቱ። <b>3.</b> ዳሽቦርዱን ያንብቡ፡</p>
-<div class="kpi"><div>TDC<b>{m(B['TDC'])} ሚ.</b>ብር</div><div>GDV<b>{m(B['GDV'])} ሚ.</b>ብር</div><div>ትርፍ ከወጪ<b>{pct(B['POC'])}</b></div>
-<div>ባለቤት IRR<b>{pct(B['EIRR'])}</b>hurdle {pct(B['HURDLE'], 0)}</div><div>ዝቅተኛ DSCR<b>{B['MIN_DSCR']:.2f}x</b>ግዴታ {B['DSCR_COV']:.2f}x</div></div>
-<p><b>4. ገንዘቡ ከየት መጣ?</b> ካፒታል {m(B['EQ_DRAWN'])}፣ ቅድመ-ሽያጭ {m(B['PS_USED'])}፣ ብድር {m(B['DEBT_DRAWN'])} ሚሊዮን ብር። ከፍተኛው ብድር (IDC ጨምሮ) {m(B['PEAK_DEBT'])} ሚሊዮን ነው።
-በርክክብ የሚሰበሰበው {m(B['HAND_TOT'])} ሚሊዮን ብርና ከግንባታ በኋላ የሚሸጡ አፓርትመንቶች 40% በሽያጭ ገንዘብ ብድሩን ቀድሞ ለመክፈል ይውላሉ።</p>
-<p><b>5. ትርፉ ከየት ይመጣል?</b> የአፓርትመንቶች ሽያጭ {m(B['SALES_NOM'])} ሚሊዮን ብር ገቢ ያስገኛል፤ ሱቆቹ በተረጋጋ ዓመት {m(B['NOI_STAB'])} ሚሊዮን ብር የተጣራ ኪራይ (NOI) ይሰጣሉ፣
-ዋጋቸውም በ9% ካፕ ሬት {m(B['RET_VALUE'])} ሚሊዮን ብር ይገመታል። ከወጪ አንጻር ዓመታዊ ገቢ {pct(B['YOC'])}። ውሳኔ፡ <b>{B['VERDICT']}</b>።</p>
-<h2>ሦስት «ምን ቢሆን» መልመጃዎች</h2>
-<div class="box blue"><b class="t">መልመጃ 1 — የሽያጭ ዋጋ በ10% ቢቀንስ?</b>በገጽ 52 «Sale price» የማስተካከያ ሕዋሱን 90% ያድርጉ (ወይም ባለአንድ አቅጣጫ ሰንጠረዡን 90% ረድፍ ያንብቡ)።<br>
-<b>መልስ፡</b> ባለቤት IRR ከ{pct(B['EIRR'])} ወደ {pct(B['EIRR_P90'])} ይወርዳል። የNPV ሚዛን ነጥብ ዋጋ {etb(B['BE_PRICE_NPV'])} ብር/m² ስለሆነ ፕሮጀክቱ አሁንም ከቅናሽ መጠኑ በላይ ያስገኛል።</div>
-<div class="box"><b class="t">መልመጃ 2 — አስቸጋሪው ሁኔታ (Downside)</b>በመጀመሪያ ገጽ ጥያቄ 3ን «3 – Downside» ያድርጉ፡ ዋጋ −10%፣ ወጪ +10%፣ 6 ወር መዘግየት፣ ወለድ +2 ነጥብ፣ ቅድመ-ሽያጭ −25%…<br>
-<b>መልስ፡</b> ባለቤት IRR {pct(sc[3][0])}፣ ትርፍ ከወጪ {pct(sc[3][1])}፣ ዝቅተኛ DSCR {sc[3][2]:.2f}x — ውሳኔው «NOT VIABLE» ይሆናል፣ C18 ማስጠንቀቂያ ያሳያል። ይህ ፕሮጀክቱ
-ለወጪ ጭማሪና ለመዘግየት ስሜታዊ መሆኑን ያሳያል — ቋሚ ዋጋ ያለው የግንባታ ውል ወይም ተጨማሪ ቅድመ-ሽያጭ ያስቡ።</div>
-<div class="box green"><b class="t">መልመጃ 3 — ምሳሌ ሀን «ምድር ወለሉን ማከራየት» (የማሻሻያ መንገድ)</b>ጥያቄ 2 = ምሳሌ ሀ፣ ዓይነት 0። በብሎክ 2 «I may rent out part of the house» = Yes፣ 60 m²፣ በወር 25,000 ብር (የዛሬ ዋጋ)።<br>
-<b>መልስ፡</b> የመጀመሪያ ዓመት ኪራይ {etb(Ar['RENT1'])} ብር፣ በጠቅላላ ወጪ ላይ ዓመታዊ ገቢ {pct(Ar['YIELD'])}፣ ቀላል የመመለሻ ጊዜ {Ar['PAYBACK']:.1f} ዓመት፣ ኪራዩ የወርሃዊ ክፍያውን
-{pct(Ar['COVER'], 0)} ይሸፍናል። ቀጣዩ እርምጃ፡ ዓይነቱን ወደ 3 ቀይረው ሙሉ ትርፋማነትን በተመሳሳይ መረጃ ማየት ይቻላል።</div>
-{fig("Ar_02_Home_1.png", "ምስል 12.3 — ምሳሌ ሀ ከፊሉን በማከራየት፡ የኪራይ ገቢ፣ ዓመታዊ ገቢና የመመለሻ ጊዜ።", [(1, 3, 12)], ["የማከራየት አማራጭ ውጤቶች"], width=70, crop=(0.8, 0.94, 0, 0.62))}
+    # ================================================================ CH9 – engine
+    S.append(f"""<div class="page">{chapter(9, "ወጪ፣ ወርሃዊ ግንባታና ብድር (20–30)", "Commercial track – the engine", "CH09", "ክፍል ለ · የንግድ ፕሮጀክት")}
+<h2>የልማት ወጪ (22 Capex)</h2>
+<p>የሕንፃ ወጪ በ9 ክፍሎች፡ የመረጃ ቋት ዋጋ × የቦታ ማስተካከያ × የፎቅ ማስተካከያ × GFA፣ ወይም BOQ ጠቅላላ ዋጋ። በምሳሌ 1 የዛሬ ዋጋ የሕንፃ ወጪ
+{m(C["HARD_BASE"])} ሚ. ነው፤ ከጭማሪ፣ መጠባበቂያና ክፍያዎች በኋላ የግንባታ ወጪ {m(C["CONSTR_COST"])} ሚ.፣ መሬት {m(C["LAND_TOT"])} ሚ.፣
+የብድር ወጪ (IDC ጨምሮ) {m(C["FIN_CAP"])} ሚ. — <b>ጠቅላላ የልማት ወጪ (TDC) {m(C["TDC"])} ሚሊዮን ብር</b>።</p>
+<h2>ወርሃዊ ግንባታና የገንዘብ ምንጭ (23 Construction)</h2>
+<p>እስከ 48 ወራት፡ S-ኩርባ፣ የዋጋ ጭማሪ፣ ወርሃዊ ወጪ፣ የልዩ ባለሙያ አማካሪ፣ ቅድመ-ሽያጭ ገቢና የገንዘብ ምንጭ ቅደም ተከተል፡
+<b>(1) የቅድመ-ሽያጭ ገንዘብ → (2) የባለቤት ካፒታል → (3) የባንክ ብድር → (4) ተጨማሪ ካፒታል</b>። ከመክፈቻ በፊት ወጪ በርክክብ ወር ይወጣል፤ እንደ ወጪ ይመዘገባል ግን
+እንደ ግንባታ ወጪ በገንዘብ ምንጮቹ ይሸፈናል። «Facility headroom» ግብዓት ብድሩ የባንክ ክፍያዎችንም እንዲሸፍን ያደርጋል — ስለዚህ ክፍተት አይቀርም።</p>
+{fig("C_23_Construction_1.png", "ምስል 9.1 — 23 Construction (ምሳሌ 1)፡ ወርሃዊ ወጪ፣ የገንዘብ ፍላጎትና ቅድመ-ሽያጭ።", width=100, crop_=(0.06, 0.72, 0, 1))}
+<h2>ብድር (27 Loan)</h2>
+<p>ብድሩ በወር ለ288 ወራት ይሰላል። በግንባታ ወቅት ወለዱ (IDC) በብድሩ ላይ ይጨመራል — <span class="formula">IDC = (መነሻ ቀሪ + የወሩ ብድር) × ወለድ ÷ 12</span>
+ዙሪያ-ጥገኛ ቀመር የለም። ከዚያ የእፎይታ ጊዜ (ወለድ-ብቻ ወይም ወደ ብድሩ የሚጨመር)፣ እኩል ክፍያ፣ እኩል ዋና ገንዘብ ወይም balloon፣ በወር/በሩብ/በዓመት፣
+ከሽያጭ ገቢ ቅድመ ክፍያ (cash sweep) እና DSRA። ምሳሌ 1 ብድሩን በ{C["LN_FINAL_DATE"]:%m/%Y} ይጨርሳል፤ ምሳሌ 2 ደግሞ በ{H["LN_FINAL_DATE"]:%m/%Y}።</p>
 </div>""")
-    # ------------------------------------------------------------------ CH13
-    faqs = [
-        ("ሞዴሉን ለመጠቀም የፋይናንስ ባለሙያ መሆን አለብኝ?", "አይ። ሰማያዊ ሕዋሶችን ብቻ ይሞላሉ፤ ቀሪውን ሞዴሉ ያሰላል። ለንግድ ፕሮጀክት ግን ውጤቱን ከባንክዎ ወይም ከአማካሪ ጋር መወያየት ይመከራል።"),
-        ("የወጪ ዋጋዎቹ ትክክለኛ ናቸው?", "የመረጃ ቋቱ ዋጋዎች ናሙና ናቸው (Sample value — not market advice)። ከኮንትራክተር፣ ከBOQ ወይም ከራፋ የግንባታ ዋጋ ኢንዴክስ በተገኘ ዋጋ ይተኩዋቸው።"),
-        ("ፎቆቼ ከ16 በላይ ቢሆኑስ?", "ሞዴሉ 2 ምድር ቤትና እስከ G+13 ይቀበላል። ለበለጠ፣ ተመሳሳይ ፎቆችን በአንድ ረድፍ ደምረው ያስገቡ (አገልግሎታቸው አንድ እስከሆነ)።"),
-        ("ግንባታው ከ48 ወር በላይ ቢሆንስ?", "ሞዴሉ እስከ 48 ወር ያስተናግዳል። ረጅም ፕሮጀክቶችን በደረጃ (phase) ከፍለው ለእያንዳንዱ ፋይል ይጠቀሙ።"),
-        ("የግብር መጣኔዎቹ ወቅታዊ ናቸው?", "በገጽ 12 ምንጫቸው ተጽፏል፤ ግን ሁሉም «Verify before use» ተብለዋል። ከመጠቀምዎ በፊት ከገቢዎች ሚኒስቴር ወይም ከግብር አማካሪ ያረጋግጡ።"),
-        ("ለምን የቤት ብድር ክፍያዬ ከባንኩ ትንሽ ይለያል?", "ባንኮች የተለያዩ የክፍያ ቀኖች፣ የአገልግሎት ክፍያዎችና መድን ይጨምራሉ። ሞዴሉ ንጹህ PMT ይጠቀማል — ልዩነቱ ትንሽ መሆን አለበት።"),
-        ("ውጤቱ «NOT VIABLE» ቢል ምን ላድርግ?", "ቶርኔዶውን ይመልከቱ — ብዙ የሚያናውጠውን ነጂ ይለዩ። ብዙ ጊዜ ዋጋ፣ ወጪ ወይም የቅድመ-ሽያጭ መጠን ናቸው። የሚዛን ነጥቦቹ ምን ያህል መቀየር እንዳለበት ያሳያሉ።"),
-        ("Data Tables ለምን አይቀየሩም?", "Excel «Automatic except for data tables» ላይ ከሆነ F9 ይጫኑ። LibreOffice ሰንጠረዦቹን በትክክል አያሰላም — በExcel ይጠቀሙ።"),
-        ("ማክሮ ወይም ኢንተርኔት ያስፈልጋል?", "አያስፈልግም። ሁሉም በቀመር ነው፤ ፋይሉ ከመስመር ውጪ ይሠራል።"),
-        ("የራሴን ፕሮጀክት ከምሳሌዎቹ እንዴት እለያለሁ?", "ጥያቄ 2ን «My project» ያድርጉና በዓምድ E ብቻ ይጻፉ። ባዶ ፋይሉን (Rapha_Model_Blank.xlsx) መጀመሪያ መጠቀምም ይቻላል።"),
-    ]
-    fq = "".join(f"<h3>{i + 1}. {q}</h3><p>{a}</p>" for i, (q, a) in enumerate(faqs))
-    S.append(f"""<div class="page">{chapter(13, "ተደጋጋሚ ጥያቄዎችና መዝገበ ቃላት", "FAQ and English–Amharic glossary", "CH13")}
-<h2>ተደጋጋሚ ጥያቄዎች</h2>{fq}</div>""")
+    S.append(f"""<div class="page">
+{fig("C_27_Loan_1.png", "ምስል 9.2 — 27 Loan፡ ዓመታዊ ማጠቃለያና የባንክ መረጃ (ምሳሌ 1)።", width=100)}
+<table><tr><th>ገጽ</th><th>ምን ያሰላል</th></tr>
+<tr><td>20 Timeline</td><td>C1–C4 የግንባታ ዓመታት፣ O1–O10 የሥራ ዓመታት፣ የኢትዮጵያ ዓመት፣ የቅናሽ ማባዣዎች፣ የወር ጠቋሚዎች</td></tr>
+<tr><td>21 Area</td><td>የፎቅ ስፋቶች፣ FAR፣ የተጣራ/ጠቅላላ ጥምርታ፣ የወጪ ድልድል (IAS 2/40/16)፣ የኪራይ ተ.እ.ታ ድርሻ</td></tr>
+<tr><td>24 Revenue</td><td>ቅድመ-ሽያጭና ሽያጭ (IFRS 15)፣ ኪራይ፣ ሆቴል፣ የቁልፍ ገንዘብ፣ ሌሎች ገቢዎች፣ NOI</td></tr>
+<tr><td>25 Opex</td><td>የንብረት ወጪ፣ አስተዳደር፣ መድን፣ የንብረት ግብር፣ ጥገና፣ ማስታወቂያ፣ አጠቃላይ ወጪ፣ ከመክፈቻ በፊት ወጪ</td></tr>
+<tr><td>26 Assets</td><td>የእርጅና ቅናሽ በክፍል (መዋቅር 50፣ ሲስተሞች 20፣ ዕቃ 7 ዓመት)፣ IAS 36 ፈተና</td></tr>
+<tr><td>28 Tax</td><td>CIT፣ የግብር እርጅና፣ ኪሳራ በዓመት (FIFO፣ 5 ዓመት)፣ የዘገየ ግብር፣ ያልተከፋፈለ ትርፍ ግብር</td></tr>
+<tr><td>29 VAT · 30 WorkingCap</td><td>የተ.እ.ታ ሂሳብና ተመላሽ፤ ተሰብሳቢ፣ ተከፋይ፣ ማስያዣ፣ የውል ዕዳ</td></tr></table>
+<div class="box"><b class="t">እነዚህን ገጾች መቀየር አያስፈልግዎትም</b>ሞተሩ ከግብዓቶቹ ሁሉንም ያሰላል። ለማየትና ለመፈተሽ ብቻ ይክፈቷቸው — እያንዳንዱ ረድፍ ስም፣ መለኪያና ጠቅላላ ዓምድ አለው።</div>
+</div>""")
+    # ================================================================ CH10 – statements
+    S.append(f"""<div class="page">{chapter(10, "የፋይናንስ መግለጫዎች (40–43)", "Commercial track – IFRS statements and lender ratios", "CH10", "ክፍል ለ · የንግድ ፕሮጀክት")}
+<p>ሦስቱ መግለጫዎች ለ14 ጊዜያት (C1–C4፣ O1–O10) በሺህ ብር ይቀርባሉ። ሀብትና ዕዳ በየዓመቱ ሚዛናዊ ነው (C01)፣ የገንዘብ ፍሰቱ የመጨረሻ ቀሪ ከሀብትና ዕዳው ጥሬ ገንዘብ ጋር እኩል ነው (C02)።</p>
+{fig("C_40_PL_1.png", "ምስል 10.1 — 40 PL፡ ገቢ፣ የሽያጭ ወጪ፣ የሥራ ማስኬጃ ወጪ (ከመክፈቻ በፊት ወጪ ጨምሮ)፣ EBITDA፣ ወለድ፣ ግብርና የተጣራ ትርፍ (ምሳሌ 1)።", width=100)}
+{fig("C_42_CF_1.png", "ምስል 10.2 — 42 CF (IAS 7)፡ ከሥራ፣ ከኢንቨስትመንትና ከፋይናንስ፣ የትርፍ ድርሻና የካፒታል ተመላሽ (በDSCR ፈተና)፣ DSRA።", width=100)}
+</div>""")
+    S.append(f"""<div class="page">
+{fig("C_41_BS_1.png", "ምስል 10.3 — 41 BS፡ የኢንቨስትመንት ንብረት፣ PPE፣ ክምችት፣ ጥሬ ገንዘብ፣ ብድር፣ የሊዝ ዕዳ፣ የዘገየ ግብር፣ የባለቤት ሀብትና NCI።", width=100)}
+{fig("C_43_Ratios_1.png", "ምስል 10.4 — 43 Ratios፡ CFADS፣ DSCR፣ LLCR፣ ICR፣ gearing፣ net debt/EBITDA።", width=100)}
+<p><b>DSCR</b> (የዕዳ ክፍያ ሽፋን) = ለዕዳ ክፍያ ያለ ገንዘብ ÷ የዕዳ ክፍያ። ምሳሌ 1 ዝቅተኛው {C["MIN_DSCR"]:.2f}x ነው (ግዴታው 1.30x)።
+ከግዴታው በታች ከወረደ የትርፍ ድርሻ ይቆለፋል። <b>LLCR</b> በብድሩ ቀሪ ዘመን የሚገኘው ገንዘብ የአሁኑ ዋጋ ÷ የብድሩ ቀሪ ({C["LLCR_O1"]:.2f}x በO1)።</p>
+</div>""")
+    # ================================================================ CH11 – returns
+    S.append(f"""<div class="page">{chapter(11, "ተመላሽና ውሳኔ (50–51)", "Commercial track – returns, payback and the verdict", "CH11", "ክፍል ለ · የንግድ ፕሮጀክት")}
+{fig("C_50_Returns_1.png", "ምስል 11.1 — 50 Returns፡ የመጨረሻ ዋጋ፣ የፕሮጀክትና የባለቤት የገንዘብ ፍሰት፣ NPV፣ XIRR፣ ብዜት፣ GDV፣ ውሳኔ (ምሳሌ 1)።", width=100)}
+<table><tr><th>መለኪያ</th><th>ትርጉም</th><th class="num">ምሳሌ 1</th><th class="num">ምሳሌ 2</th></tr>
+<tr><td>የባለቤት IRR (XIRR)</td><td>ባለቤቱ ያስገባው ገንዘብ በዓመት የሚያስገኘው ተመላሽ፣ በቀን የተሰላ</td><td class="num">{pct(C["EIRR"])}</td><td class="num">{pct(H["EIRR"])}</td></tr>
+<tr><td>የፕሮጀክት IRR</td><td>ብድርን ሳይቆጥር የፕሮጀክቱ ተመላሽ</td><td class="num">{pct(C["PIRR"])}</td><td class="num">{pct(H["PIRR"])}</td></tr>
+<tr><td>NPV @ 18%</td><td>የወደፊት ገንዘብ የአሁን ዋጋ ሲቀነስ ወጪ</td><td class="num">{m(C["PNPV"])} ሚ.</td><td class="num">{m(H["PNPV"])} ሚ.</td></tr>
+<tr><td>GDV ÷ TDC</td><td>የተጠናቀቀው ሕንፃ ዋጋ ÷ ጠቅላላ ወጪ</td><td class="num">{C["GDV"]/C["TDC"]:.2f}x</td><td class="num">{H["GDV"]/H["TDC"]:.2f}x</td></tr>
+<tr><td>Profit on cost</td><td>(GDV − TDC) ÷ TDC</td><td class="num">{pct(C["POC"])}</td><td class="num">{pct(H["POC"])}</td></tr>
+<tr><td>Yield on cost</td><td>የተረጋጋ NOI ÷ የተያዘው ንብረት ወጪ</td><td class="num">{pct(C["YOC"])}</td><td class="num">{pct(H["YOC"])}</td></tr>
+<tr><td>የመመለሻ ጊዜ (ባለቤት)</td><td>ከግንባታ መጀመሪያ ጀምሮ በዓመት</td><td class="num">{C["PB_E"]:.1f}</td><td class="num">{H["PB_E"]:.1f}</td></tr></table>
+<div class="box green"><b class="t">ውሳኔው እንዴት ይወሰናል?</b><b>VIABLE (አዋጭ)</b>፡ የባለቤት IRR ≥ ዝቅተኛ ተፈላጊ (20%)፣ profit on cost &gt; 0 እና DSCR ግዴታውን ያሟላል።
+<b>MARGINAL</b>፡ IRR ከተፈላጊው በ3 ነጥብ ውስጥ ሲሆንና GDV ≥ TDC። <b>NOT VIABLE</b>፡ ሌላው ሁሉ። ሁለቱም ምሳሌዎች በመሠረታዊ ሁኔታ VIABLE ናቸው።</div>
+</div>""")
+    # ================================================================ CH12 – sensitivity
+    S.append(f"""<div class="page">{chapter(12, "የቀጥታ ስጋትና የሚዛን ነጥብ (52 Sensitivity)", "Commercial track – live sensitivity and break-even", "CH12", "ክፍል ለ · የንግድ ፕሮጀክት")}
+<p>በስሪት 2 ገጽ 52 Data Table አይጠቀምም — ሁሉም በቀመር ስለሚሰላ በExcel፣ በLibreOffice እና በGoogle Sheets ወዲያውኑ ይታደሳል። አራት ክፍሎች አሉት።</p>
+{fig("C_52_Sensitivity_1.png", "ምስል 12.1 — 52 Sensitivity (ምሳሌ 1)፡ ማስተካከያዎች፣ ውጤቶች፣ የአሁን ዋጋዎች፣ ቶርኔዶና የሚዛን ነጥቦች።",
+     [(1, 2, 14), (2, 2, 27), (3, 2, 41), (4, 2, 64), (5, 2, 90)],
+     ["«ቢሆንስ» ማስተካከያዎች (100% = እንደ ግብዓቱ)", "ውጤቶች — ማስተካከያ ሲቀየር ወዲያውኑ ይቀየራሉ", "የቶርኔዶና የሚዛን ነጥብ ረዳት የአሁን ዋጋዎች",
+      "ቶርኔዶ፡ ለ±20% የዋጋ ለውጥ (ሚሊዮን ብር)", "የሚዛን ነጥቦች ከ«headroom» ጋር"], width=100, crop_=(0.1, 1, 0, 0.62))}
+<h2>1. «ቢሆንስ» ማስተካከያዎች</h2>
+<p>ሰባት ሕዋሶች፡ የሽያጭ ዋጋ፣ የግንባታ ወጪ፣ ኪራይና የሆቴል ዋጋ፣ ይዞታ፣ ወለድ፣ የሥራ ማስኬጃ ወጪ (በ%) እና ተጨማሪ መዘግየት (በወር)። ለምሳሌ የግንባታ ወጪን 110% ቢያደርጉ
+ሙሉ ሞዴሉ — ብድሩ፣ ግብሩ፣ መግለጫዎቹ፣ IRR — ይሰላል። <b>ሲጨርሱ ወደ 100% / 0 ይመልሱ</b>፤ ካልመለሱ ማረጋገጫ C17 እና ዳሽቦርዱ ያስጠነቅቁዎታል።</p>
+</div>""")
+    S.append(f"""<div class="page">
+<h2>2. ቶርኔዶ — የትኛው ግምት ይበልጥ ያሰጋል?</h2>
+<p>ለእያንዳንዱ ነጂ ±20% ለውጥ በፕሮጀክቱ ዋጋ (NPV) ላይ የሚያመጣው ለውጥ ይሰላል — ከግብር በፊት፣ በመጀመሪያ ደረጃ ግምት፡</p>
+<table><tr><th>ነጂ</th><th>ቀመር (ሚሊዮን ብር)</th><th class="num">ምሳሌ 1</th><th class="num">ምሳሌ 2</th></tr>
+<tr><td>የሽያጭ ዋጋ</td><td>±20% × PV(የሽያጭ ገቢ)</td><td class="num">±{m(0.2*C["PV_SALESNET"])}</td><td class="num">±{m(0.2*H["PV_SALESNET"])}</td></tr>
+<tr><td>የቦታዎች ኪራይ</td><td>±20% × PV(ኪራይ + የመጨረሻ ዋጋ ድርሻ)</td><td class="num">±{m(0.2*C["PV_SPRENT"])}</td><td class="num">±{m(0.2*H["PV_SPRENT"])}</td></tr>
+<tr><td>የሆቴል ገቢ</td><td>±20% × PV(የሆቴል ኪራይ)</td><td class="num">±{m(0.2*C["PV_HOTRENT"])}</td><td class="num">±{m(0.2*H["PV_HOTRENT"])}</td></tr>
+<tr><td>የግንባታ ወጪ</td><td>∓20% × PV(የግንባታ ወጪ)</td><td class="num">∓{m(0.2*C["PV_CAPX"])}</td><td class="num">∓{m(0.2*H["PV_CAPX"])}</td></tr>
+<tr><td>6 ወር መዘግየት</td><td>የገቢዎች መዘግየትና የዋጋ ጭማሪ</td><td class="num">−{m(C["DELAY6_PV"])}</td><td class="num">−{m(H["DELAY6_PV"])}</td></tr></table>
+<p>ትልቁ ስጋት — ምሳሌ 1፡ <b>{C["TOP_RISK"]}</b>፤ ምሳሌ 2፡ <b>{H["TOP_RISK"]}</b>። ቶርኔዶው በትልቁ ለውጥ ተደርድሮ በዳሽቦርዱ ገበታ ላይ ይታያል።</p>
+<h2>3. የሚዛን ነጥቦች (break-even)</h2>
+<table><tr><th>የሚዛን ነጥብ</th><th class="num">ምሳሌ 1</th><th class="num">ምሳሌ 2</th></tr>
+<tr><td>NPV = 0 የሚሆንበት የሽያጭ ዋጋ (ብር/m²)</td><td class="num">{etb(C["BE_PRICE_NPV"])} (አሁን {etb(C["BLEND_PRICE"])})</td><td class="num">— (ሽያጭ የለም)</td></tr>
+<tr><td>NPV = 0 የሚሆንበት የኪራይ ደረጃ (ከግብዓቱ %)</td><td class="num">{pct(C["BE_RENT_NPV"], 0)}</td><td class="num">{pct(H["BE_RENT_NPV"], 0)}</td></tr>
+<tr><td>ዝቅተኛ DSCR = ግዴታ የሚሆንበት ይዞታ</td><td class="num">{pct(C["BE_OCC"], 0)}</td><td class="num">{pct(H["BE_OCC"], 0)}</td></tr>
+<tr><td>IRR ከተፈላጊው በታች ከመውረዱ በፊት የወጪ ጭማሪ</td><td class="num">{pct(C["BE_COST"], 0)}</td><td class="num">{pct(H["BE_COST"], 0)}</td></tr>
+<tr><td>ዝቅተኛ DSCR = ግዴታ የሚሆንበት ወለድ</td><td class="num">{pct(C["BE_RATE"])}</td><td class="num">{pct(H["BE_RATE"])}</td></tr>
+<tr><td>IRR ከተፈላጊው በታች ከመውረዱ በፊት መዘግየት (ወራት)</td><td class="num">{C["BE_DELAY"]:.0f}</td><td class="num">{H["BE_DELAY"]:.0f}</td></tr>
+<tr><td>NPV = 0 የሚሆንበት የመውጫ ካፕ ሬት</td><td class="num">{"— (NPV በመጨረሻ ዋጋ ላይ አይመሠረትም)" if not C["BE_CAP"] else pct(C["BE_CAP"])}</td><td class="num">{pct(H["BE_CAP"])}</td></tr></table>
+<div class="box"><b class="t">ትክክለኛውን ውጤት ለማየት</b>ቶርኔዶውና የሚዛን ነጥቦቹ ፈጣን ግምቶች ናቸው። ትክክለኛውን ለማየት ተገቢውን ማስተካከያ በገጹ ላይኛው ክፍል ይቀይሩ፤
+ሁኔታዎችን ለማወዳደር ደግሞ በመጀመሪያ ገጽ «Scenario» ይቀይሩ።</div>
+</div>""")
+    # ================================================================ CH13 – dashboard & checks
+    S.append(f"""<div class="page">{chapter(13, "ዳሽቦርድና ቼኮች (01, 60)", "Commercial track – dashboard, key findings and checks", "CH13", "ክፍል ለ · የንግድ ፕሮጀክት")}
+{fig("H_01_Dashboard_1.png", "ምስል 13.1 — 01 Dashboard (ምሳሌ 2)፡ ውሳኔ፣ ስድስት ቁልፍ ቁጥሮች፣ አምስት ገበታዎች፣ ቶርኔዶ፣ የገንዘብ ምንጭና አጠቃቀም፣ ማስጠንቀቂያዎችና ዋና ዋና ግኝቶች።",
+     [(1, 63, 7.7), (2, 7, 12.5), (3, 8, 23), (4, 74, 43), (5, 52, 64), (6, 8, 82)],
+     ["ውሳኔ — አረንጓዴ/ቢጫ/ቀይ", "ስድስት ካርዶች፡ TDC፣ GDV፣ profit on cost፣ IRR፣ ከፍተኛ ዕዳ፣ ዝቅተኛ DSCR", "ገበታዎች፡ የገንዘብ ፍሰት፣ ብድር፣ DSCR፣ ገቢ፣ ወጪ",
+      "ቶርኔዶ (ሚሊዮን ብር)", "ማስጠንቀቂያዎች (✓ / ! / ✗)", "ዋና ዋና ግኝቶች — በሞዴሉ የሚጻፍ ማጠቃለያ"], width=100)}
+<h2>ዋና ዋና ግኝቶች</h2>
+<p>በዳሽቦርዱ ግርጌ ሰባት ዓረፍተ ነገሮች ከቁጥሮቹ በቀጥታ ይጻፋሉ፡ ውሳኔ፣ ተመላሽ፣ ወጪና የገንዘብ ምንጭ፣ የባንክ እይታ፣ ገቢ፣ ትልቁ ስጋትና የሚዛን ነጥቦች፣
+የመሬት አጋርና ዝቅተኛ እርግጠኝነት ያላቸው ግብዓቶች። ለባንክ ወይም ለባለሀብት ማቅረቢያ ዝግጁ ናቸው — ግብዓት ሲቀየር ራሳቸው ይቀየራሉ።</p>
+</div>""")
+    S.append(f"""<div class="page">
+{fig("C_60_Checks_1.png", f"ምስል 13.2 — 60 Checks፡ {C['CHK_PASS']} / {C['CHK_TOTAL']} ማረጋገጫዎች PASS (ምሳሌ 1)።", width=88, crop_=(0, 1, 0, 0.7))}
+<table><tr><th>ቡድን</th><th>ማረጋገጫዎች</th></tr>
+<tr><td>ሂሳብ</td><td>C01 ሀብት = ዕዳ + ካፒታል · C02 ጥሬ ገንዘብ · C03 ምንጭ = አጠቃቀም · C04 TDC · C05 የወጪ ድልድል · C16 ተ.እ.ታ</td></tr>
+<tr><td>ብድርና ግብር</td><td>C06 ብድር በጊዜው ያልቃል · C07 የዋና ገንዘብ ድምር · C12 ኪሳራ አሉታዊ አይሆንም · C10 መሬት እርጅና የለውም</td></tr>
+<tr><td>ሽያጭና ቦታ</td><td>C08 ክምችት ያልቃል · C09 የውል ሂሳቦች · C11 የተጣራ ስፋት ≤ ጠቅላላ · C15 ቅድመ-ሽያጭ ≤ 100%</td></tr>
+<tr><td>ቁጥጥር</td><td>C13 ምርጫዎች ትክክል · C14 የቀመር ስህተት የለም</td></tr>
+<tr><td>ማስጠንቀቂያዎች (W)</td><td>C17 ማስተካከያዎች ገለልተኛ · C18 DSCR · C19 ዝቅተኛ ጥሬ ገንዘብ · C20 ክፍተት · C21 FAR · C22 የተጣራ/ጠቅላላ ጥምርታ · C23 የሆቴል ግብዓቶች · C24 ቦታ ገብቷል · C25 IAS 36</td></tr></table>
+<div class="box red"><b class="t">FAIL ካዩ</b>ቁጥሮቹን አይመኑ። በጣም የተለመደው ምክንያት በቀመር ሕዋስ ላይ መጻፍ ነው። ማስጠንቀቂያ (WARN) ስህተት አይደለም — ፕሮጀክቱ
+ትኩረት የሚፈልግበት ቦታ ነው (ለምሳሌ በአስቸጋሪ ሁኔታ DSCR ከግዴታው በታች መውረድ)።</div>
+</div>""")
+    # ================================================================ CH14 – sample 1
+    S.append(f"""<div class="page">{chapter(14, "ምሳሌ 1፡ B+G+8 ቅይጥ ሕንፃ", "Worked example – Sample 1, mixed-use (type 3)", "CH14")}
+<p>ምሳሌ 1 በአዲስ አበባ ቂርቆስ ክ/ከተማ ያለ 1,000 m² ቦታ ላይ የሚገነባ B+G+8 ሕንፃ ነው፡ ምድር ቤት መኪና ማቆሚያ፣ ምድርና አንደኛ ፎቅ ሱቆች (የሚከራዩ)፣
+ከ2ኛ–8ኛ ፎቅ አፓርትመንቶች (የሚሸጡ)። ጠቅላላ ስፋት {etb(C["GFA"])} m²፣ የተጣራ {etb(C["NET_AREA"])} m² — {etb(C["SALE_AREA"])} m² ለሽያጭ፣
+{etb(C["LET_AREA"])} m² ለኪራይ። ግንባታው {C["CONSTR_EFF"]} ወራት ነው። 70% አፓርትመንቶች በግንባታ ወቅት በቅድሚያ ይሸጣሉ።</p>
+<div class="kpi"><div>TDC<b>{m(C["TDC"])} ሚ.</b></div><div>GDV<b>{m(C["GDV"])} ሚ.</b></div><div>የባለቤት IRR<b>{pct(C["EIRR"])}</b></div>
+<div>ዝቅተኛ DSCR<b>{C["MIN_DSCR"]:.2f}x</b></div><div>ውሳኔ<b>{C["VERDICT"]}</b></div></div>
+{fig("C_01_Dashboard_1.png", "ምስል 14.1 — የምሳሌ 1 ዳሽቦርድ (ዓይነት 3፣ መሠረታዊ ሁኔታ)።", width=100, crop_=(0, 0.62, 0, 1))}
+<h2>ምን እንማራለን?</h2>
+<p>• <b>የገንዘብ ምንጭ</b>፡ ከ{m(C["PEAK_FUND"])} ሚ. ፍላጎት ውስጥ የቅድመ-ሽያጭ ገንዘብ {m(C["PS_USED"])} ሚ.፣ ባለቤቱ {m(C["EQ_DRAWN"])} ሚ.፣ ባንኩ {m(C["DEBT_DRAWN"])} ሚ. ሸፍነዋል —
+ቅድመ-ሽያጭ የብድር ፍላጎትን በእጅጉ ቀንሷል። • <b>የሽያጭ ገቢ</b> 40% በ«cash sweep» ብድሩን በፍጥነት ይከፍላል። • <b>ትልቁ ስጋት</b> የሽያጭ ዋጋ ነው፤
+ዋጋው ከ{etb(C["BLEND_PRICE"])} ወደ {etb(C["BE_PRICE_NPV"])} ብር/m² ቢወርድ NPV ዜሮ ይሆናል። • በ«Downside» ሁኔታ ፕሮጀክቱ NOT VIABLE ይሆናል —
+ከባንኩ ጋር ሲደራደሩ ይህን ያስቡበት።</p>
+</div>""")
+    # ================================================================ CH15 – sample 2
+    S.append(f"""<div class="page">{chapter(15, "ምሳሌ 2፡ የንግድ ማዕከልና ሆቴል", "Worked example – Sample 2, trade centre with hotel and land partner (type 2)", "CH15")}
+<p>ምሳሌ 2 ትልቅ B+G+10 የንግድ ማዕከል ነው ({etb(H["GFA"])} m²)፡ ሱቆችና ጋለሪያ፣ የጅምላ ማሳያዎች፣ ምግብ ቤት፣ ቢሮዎች፣ ከ7ኛ–10ኛ ፎቅ 85 ክፍሎች ያሉት ሆቴል
+(በኦፕሬተር ኪራይ)፣ የባለቤቱ ዋና መሥሪያ ቤት፣ ያለ ኪራይ የሚሰጥ የከተማ አገልግሎት ቦታ፣ የሚከፈልበት መኪና ማቆሚያና መጋዘን። <b>መሬቱ ({m(H["LAND_TOT"])} ሚ.)
+ከከተማ አጋር በዓይነት የገባ ነው</b> — አጋሩ የካፒታሉን {pct(H["NCI_PCT"], 0)} እንደ አናሳ ባለድርሻ (NCI) ይይዛል። ዓይነት 2፡ ሁሉም ተይዞ ይከራያል።</p>
+<div class="kpi"><div>TDC<b>{m(H["TDC"])} ሚ.</b></div><div>የተረጋጋ NOI<b>{m(H["NOI_STAB"])} ሚ.</b></div><div>የባለቤት IRR<b>{pct(H["EIRR"])}</b></div>
+<div>ዝቅተኛ DSCR<b>{H["MIN_DSCR"]:.2f}x</b></div><div>ውሳኔ<b>{H["VERDICT"]}</b></div></div>
+<h2>ለምን እንዲህ ተዋቀረ?</h2>
+<p>• <b>የመሙላት ጊዜ</b>፡ በO1 ይዞታው ዝቅተኛ ስለሆነ የመጀመሪያው ዓመት ወለድ ወደ ብድሩ ይጨመራል (capitalised grace) እና ዘመኑ 15 ዓመት ነው —
+አለበለዚያ በO1 DSCR ከ1.1x በታች ይወርድ ነበር። • <b>የባለቤት ድርሻ 50%</b>፡ ብድሩ {m(H["DEBT_DRAWN"])} ሚ.፣ ከፍተኛ ዕዳ ከIDC ጋር {m(H["PEAK_DEBT"])} ሚ.።
+• <b>ሆቴሉ</b> ከጠቅላላ ኪራዩ ትልቅ ድርሻ ያመጣል፤ ስለዚህ የሆቴል ገቢ በቶርኔዶው ከፍተኛ ስጋቶች አንዱ ነው። • <b>ትልቁ ስጋት</b> የግንባታ ወጪ ነው፤ IRR ከተፈላጊው በታች
+ከመውረዱ በፊት ወጪው {pct(H["BE_COST"], 0)} ሊጨምር ይችላል። ኪራዩ {pct(1-H["BE_RENT_NPV"], 0)} ቢቀንስ NPV ዜሮ ይሆናል።</p>
+{fig("H_21_Area_1.png", "ምስል 15.1 — 21 Area (ምሳሌ 2)፡ የተጣራ/ጠቅላላ ጥምርታ፣ የሆቴል ስፋት፣ የወጪ ድልድል በIAS 40/16 እና የኪራይ ተ.እ.ታ ድርሻ።", width=100, crop_=(0.3, 1, 0, 0.6))}
+<div class="box blue"><b class="t">ሙከራ ያድርጉ</b>በመጀመሪያ ገጽ ዓይነቱን ወደ 3 (ቅይጥ) ይቀይሩ — 30% ሱቆች ይሸጣሉ፣ የባለቤት IRR {pct(0.247)} ገደማ ይሆናል።
+ከዚያ «Lender case» ይምረጡና DSCR እንዴት እንደሚለወጥ ይመልከቱ።</div>
+</div>""")
+    # ================================================================ CH16 – own project checklist
+    S.append(f"""<div class="page">{chapter(16, "የራስዎን ፕሮጀክት ማስገባት — የማረጋገጫ ዝርዝር", "Entering your own project – checklist", "CH16")}
+<div class="two"><div class="pathA"><h3 style="color:#2A9D8F;margin-top:0">ሀ · የግል ቤት</h3>
+<p>☐ Start፡ «Private residence» + «My house»<br>☐ P1 ብሎክ 1–2፡ ቤት፣ ቀን፣ ወራት፣ ዓይነት፣ ፎቆች<br>☐ ብሎክ 3፡ ተጨማሪ ሥራዎችና ክፍያዎች<br>
+☐ ብሎክ 8፡ የመረጃ ቋቱን በወቅታዊ ዋጋ ያስተካክሉ<br>☐ ብሎክ 4–6፡ መሬት፣ ቁጠባ፣ ቤተሰብ፣ ብድር፣ ገቢ<br>☐ P4፡ ሁሉም PASS<br>☐ P3፡ ያንብቡና ያትሙ</p></div>
+<div class="pathB"><h3 style="color:#1F5FAD;margin-top:0">ለ · የንግድ ፕሮጀክት</h3>
+<p>☐ Start፡ «Commercial project» + ዓይነት + «My project» + «Base»<br>☐ 10 Inputs ብሎክ 1–4፡ ፕሮጀክት፣ ፎቆች፣ ወጪ፣ መሬት<br>
+☐ 13 Spaces፡ እያንዳንዱ ቦታ — ዓይነት፣ ስፋት፣ ዋጋ፣ ኪራይ፣ ይዞታ<br>☐ ብሎክ 5–8፡ ሽያጭ፣ ኪራይ፣ ሆቴል፣ ሌሎች ገቢዎች<br>☐ ብሎክ 9–11፡ ወጪ፣ ፋይናንስ፣ ግብር<br>
+☐ ዓምድ K–L፡ እርግጠኝነትና ምንጭ<br>☐ 12 TaxLaw፡ መጣኔዎቹን ያረጋግጡ<br>☐ 60 Checks፡ ምንም FAIL የለም<br>☐ 01 Dashboard + 52 + አራቱ ሁኔታዎች</p></div></div>
+<h2>የተለመዱ ጥያቄዎች</h2>
+<table><tr><th style="width:40%">ጥያቄ</th><th>መልስ</th></tr>
+<tr><td>ከ12 በላይ ቦታዎች አሉኝ</td><td>ተመሳሳይ ዋጋና ኪራይ ያላቸውን ያጣምሩ (ለምሳሌ «ሱቆች F1–F2»)።</td></tr>
+<tr><td>ሆቴል የለኝም</td><td>«Hotel» ዓይነት ቦታ አይጨምሩ፤ የብሎክ 7 ክፍሎችን 0 ያድርጉ (C23 ይፈትሻል)።</td></tr>
+<tr><td>የመሬት አጋር የለኝም</td><td>ብሎክ 4 «Lease (cash)» ወይም «Already owned»።</td></tr>
+<tr><td>ባንኩ የተለየ ወለድ በየዓመቱ ያስከፍላል</td><td>«Variable path by year» ይምረጡና ለO1–O10 ወለዱን ይጻፉ።</td></tr>
+<tr><td>ውጤቱ በGoogle Sheets ቀርፋፋ ነው</td><td>ሞዴሉ ከ24,000 በላይ ቀመሮች አሉት፤ ከተቀየረ በኋላ ጥቂት ሰከንዶች ይጠብቁ።</td></tr>
+<tr><td>ገጽ በስህተት ተሰበረ</td><td>ከዋናው ፋይል አዲስ ቅጂ ይውሰዱና ዓምድ E (እና ገጽ 13 የላይኛው ብሎክ) ብቻ ይቅዱ።</td></tr></table>
+</div>""")
+    # ================================================================ CH17 – glossary
     half = (len(GLOSSARY) + 1) // 2
-    def gtable(items):
-        return ('<table class="gl"><tr><th>English</th><th>አማርኛ</th><th>ትርጉም</th></tr>' +
-                "".join(f"<tr><td><b>{e}</b></td><td style='color:#0F2A44;font-weight:600'>{a}</td><td>{d}</td></tr>" for e, a, d in items) + "</table>")
-    S.append(f"""<div class="page"><h2>መዝገበ ቃላት (እንግሊዝኛ – አማርኛ) — {len(GLOSSARY)} ቃላት</h2>
-<p class="small">ተመሳሳይ ቃላት በሞዴሉ ገጽ 61 ይገኛሉ።</p>{gtable(GLOSSARY[:half])}</div>
-<div class="page">{gtable(GLOSSARY[half:])}</div>""")
-    # ------------------------------------------------------------------ CH14
-    S.append(f"""<div class="page">{chapter(14, "የኃላፊነት ማስተባበያ", "Disclaimer", "CH14")}
-<p>የራፋ የግንባታ ፕሮጀክት ትርፋማነት ሞዴልና ይህ መመሪያ <b>ለዕቅድና ለትምህርት ብቻ</b> የተዘጋጁ ናቸው። የኢንቨስትመንት፣ የግብር፣ የሂሳብ አያያዝ ወይም የሕግ ምክር አይደሉም።</p>
-<p>• በምሳሌዎቹ ውስጥ ያሉ ቁጥሮች በሙሉ <b>ናሙና</b> ናቸው (Sample value — not market advice)። የገበያ ዋጋ፣ የግንባታ ወጪ፣ ኪራይና የወለድ መጠን ይለዋወጣሉ።<br>
-• የግብር መጣኔዎችና ሕጎች (የገቢ ግብር፣ ተ.እ.ታ፣ የትርፍ ድርሻ ግብር፣ የንብረት ግብር፣ የሊዝ ሁኔታዎች) በገጽ 12 ተመዝግበዋል፤ <b>ከመጠቀምዎ በፊት ወቅታዊ መሆናቸውን ማረጋገጥ ግዴታዎ ነው</b>።<br>
-• የIFRS አተገባበሩ ቀለል ተደርጎ የቀረበ ነው (ለምሳሌ ወጪ በተጣራ ስፋት ይከፋፈላል፣ የንብረት ዋጋ መቀነስ ፈተና ብቻ ይደረጋል)። ለሕጋዊ የሂሳብ መግለጫ ፈቃድ ያለው ኦዲተር ያማክሩ።<br>
-• የሞዴሉ ውጤቶች ጥራት በገባው መረጃ ጥራት ላይ ይመሠረታል። ውሳኔ ከመወሰንዎ በፊት ከባለሙያ የተዘጋጀ BOQ፣ የገበያ ጥናትና የባንክ ይፋዊ የብድር ውል ያግኙ።<br>
-• ሞዴሉን ማሻሻል፣ ቀመሮችን መቀየር ወይም ማረጋገጫዎቹን ማጥፋት ውጤቱን ሊያበላሽ ይችላል። ሁልጊዜ ሁሉም ማረጋገጫዎች PASS መሆናቸውን ያረጋግጡ።</p>
-<div class="box red"><b class="t">ማሳሰቢያ</b>ደራሲዎቹና አከፋፋዮቹ በዚህ ሞዴል ላይ ተመሥርቶ ለሚወሰድ ማንኛውም ውሳኔ ወይም ለሚደርስ ኪሳራ ኃላፊነት አይወስዱም።</div>
+    def gtab(items):
+        return '<table class="gl"><tr><th>English</th><th>አማርኛ</th></tr>' + "".join(
+            f"<tr><td>{en}</td><td>{am}</td></tr>" for en, am, _ in items) + "</table>"
+    S.append(f"""<div class="page">{chapter(17, "መዝገበ ቃላትና ማሳሰቢያ", "Glossary and disclaimer", "CH17")}
+<p class="small">ሙሉ ትርጉሞቹ በሞዴሉ ገጽ 61 Glossary ይገኛሉ።</p>
+<div class="two"><div>{gtab(GLOSSARY[:half])}</div><div>{gtab(GLOSSARY[half:])}</div></div></div>""")
+    S.append("""<div class="page"><h2>ማሳሰቢያ</h2>
+<p>• ይህ ሞዴልና መመሪያ <b>የዕቅድ መሣሪያዎች ብቻ</b> ናቸው፤ የኢንቨስትመንት፣ የግብር፣ የሂሳብ ወይም የሕግ ምክር አይደሉም።<br>
+• በምሳሌዎቹ ውስጥ ያሉት ዋጋዎች፣ ኪራዮችና ወጪዎች ለማሳያ ብቻ ናቸው — «Sample value — not market advice»።<br>
+• የግብር መጣኔዎችና ሕጎች በገጽ 12 ተመዝግበዋል፤ <b>ከመጠቀምዎ በፊት ወቅታዊ መሆናቸውን ማረጋገጥ ግዴታዎ ነው</b>።<br>
+• የIFRS አተገባበሩ ቀለል ተደርጎ የቀረበ ነው። ለሕጋዊ የሂሳብ መግለጫ ፈቃድ ያለው ኦዲተር ያማክሩ።<br>
+• ውሳኔ ከመወሰንዎ በፊት ከባለሙያ የተዘጋጀ BOQ፣ የገበያ ጥናትና የባንክ ይፋዊ የብድር ውል ያግኙ።<br>
+• ቀመሮችን መቀየር ወይም ማረጋገጫዎቹን ማጥፋት ውጤቱን ሊያበላሽ ይችላል። ሁልጊዜ ሁሉም ማረጋገጫዎች PASS መሆናቸውን ያረጋግጡ።</p>
+<div class="box red"><b class="t">ኃላፊነት</b>ደራሲዎቹና አከፋፋዮቹ በዚህ ሞዴል ላይ ተመሥርቶ ለሚወሰድ ማንኛውም ውሳኔ ወይም ለሚደርስ ኪሳራ ኃላፊነት አይወስዱም።</div>
 <p class="en" style="margin-top:8mm">English summary: This model and guide are planning tools only and do not constitute investment, tax, accounting or legal advice.
 All sample figures are illustrative. Tax rates must be verified against current Ethiopian proclamations before use.</p>
-<p class="small" style="margin-top:20mm;text-align:center">የራፋ የግንባታ ፕሮጀክት ትርፋማነት ሞዴል · ስሪት 1.0 · Rapha Development Profitability Model</p>
+<p class="small" style="margin-top:20mm;text-align:center">የራፋ የግንባታ ፕሮጀክት ትርፋማነት ሞዴል · ስሪት 2.0 · Rapha Development Profitability Model</p>
 </div>""")
-    return f'<!doctype html><html lang="am"><head><meta charset="utf-8"><style>{CSS}</style></head><body>{"".join(S)}</body></html>'
+    return f'<!doctype html><html lang="am"><head><meta charset="utf-8"><style>{CSS}{EXTRA_CSS}</style></head><body>{"".join(S)}</body></html>'
 
 
 def toc_from_pdf(pdf):
@@ -614,18 +558,18 @@ def toc_from_pdf(pdf):
     with pdfplumber.open(pdf) as p:
         for i, pg in enumerate(p.pages):
             t = pg.extract_text() or ""
-            for mk in re.findall(r"CH\d\d[AB]?", t):
+            for mk in re.findall(r"CH\d\d", t):
                 pages.setdefault(mk, i + 1)
     return pages
 
 
 if __name__ == "__main__":
-    A, Ap, Ar, B = load_facts()
+    C, H, P = load_facts()
     html = os.path.join(HERE, "tutorial.html")
     pdf = os.path.join(OUT, "Rapha_Model_Tutorial_AM.pdf")
-    open(html, "w").write(build(A, Ap, Ar, B))
+    open(html, "w").write(build(C, H, P))
     subprocess.run(["node", os.path.join(HERE, "topdf.js"), html, pdf], check=True)
     toc = toc_from_pdf(pdf)
-    open(html, "w").write(build(A, Ap, Ar, B, toc))
+    open(html, "w").write(build(C, H, P, toc))
     subprocess.run(["node", os.path.join(HERE, "topdf.js"), html, pdf], check=True)
     print("TOC", toc)
