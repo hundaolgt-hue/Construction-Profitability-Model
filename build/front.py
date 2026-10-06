@@ -217,12 +217,21 @@ def build_inputs(b, blank=False):
     return sh
 
 
+def list_source(b, name):
+    """Inline list ("a,b,c") when it fits – the most robust form in Excel AND Google Sheets; else the Lists range."""
+    vals = LISTS[name]
+    joined = ",".join(vals)
+    if len(joined) <= 250 and not any("," in v or '"' in v for v in vals):
+        return '"' + joined + '"'
+    return b.LIST_RANGE[name]
+
+
 def add_validations(b):
     """Google-Sheets-safe validations: list sources point at sheet ranges (not names)."""
     for sheet, typ, arg, rng in b.DV:
         ws = b.wb[sheet]
         if typ == "list":
-            dv = DataValidation(type="list", formula1=b.LIST_RANGE[arg], allow_blank=True)
+            dv = DataValidation(type="list", formula1=list_source(b, arg), allow_blank=True)
             dv.error = "Pick a value from the list"
             dv.showErrorMessage = True
         else:
@@ -567,18 +576,21 @@ def build_start(b, blank=False):
     ws = sh.ws
 
     def dd(r, c1, c2, lst, default):
-        ws.merge_cells(start_row=r, start_column=c1, end_row=r, end_column=c2)
+        """single (unmerged) input cell with an inline dropdown; typing the number (1, 2, 3 …) also works"""
         c = ws.cell(r, c1, default)
         c.font = font(11, True, INPUT_FG)
         for cc in range(c1, c2 + 1):
             ws.cell(r, cc).fill = FILL_INPUT
-            ws.cell(r, cc).border = BOX
-        dv = DataValidation(type="list", formula1=b.LIST_RANGE[lst], allow_blank=False)
-        dv.error = "Pick a value from the list"
-        dv.showErrorMessage = True
+            ws.cell(r, cc).border = Border(top=Side(style="thin", color=BORDER), bottom=Side(style="thin", color=BORDER),
+                                           left=Side(style="thin", color=BORDER) if cc == c1 else None,
+                                           right=Side(style="thin", color=BORDER) if cc == c2 else None)
+        dv = DataValidation(type="list", formula1=list_source(b, lst), allow_blank=True)
+        dv.showErrorMessage = False          # never block typing a number
+        dv.prompt = "Pick from the list ▼ – or simply type the number (1, 2 …)"
+        dv.showInputMessage = True
         ws.add_data_validation(dv)
-        dv.add(ws.cell(r, c1).coordinate)
-        return ws.cell(r, c1).coordinate
+        dv.add(c.coordinate)
+        return c.coordinate
 
     def status(r, c, lab, f, fmt=None, cv=None):
         ws.cell(r, c, lab).font = F_BODY
@@ -603,7 +615,7 @@ def build_start(b, blank=False):
         ws["C8"] = "STEP 1 · What are you planning?  ·  ምን እያቀዱ ነው?"
         ws["C8"].font = font(11, True, NAVY)
         t = dd(9, 4, 10, "L_TRACK", LISTS["L_TRACK"][1])
-        ws["C9"] = "Choose ▸"
+        ws["C9"] = "Choose ▸  (pick ▼ or type 1 / 2)"
         ws["C9"].font = F_BOLD
         ws["C10"] = ('=IF($P$9=1,"✔ PRIVATE RESIDENCE selected → use card A (left). Card B and the commercial sheets are switched off.",'
                      '"✔ COMMERCIAL PROJECT selected → use card B (right). Card A and the P-sheets are switched off.")')
@@ -621,9 +633,10 @@ def build_start(b, blank=False):
         # ---- helpers (column P) – every conditional format on this sheet reads only these cells
         ws["O8"] = "helpers"
         ws["O8"].font = font(8, False, SEC)
-        helpers = [(9, "TRACK", f"IFERROR(MATCH({t},L_TRACK,0),2)"), (10, "P_DATA", "IFERROR(MATCH(D15,L_PDATASET,0),1)"),
-                   (11, "PROJECT_MODE", "IFERROR(MATCH(I15,L_MODE,0),3)"), (12, "DATA_SET", "IFERROR(MATCH(I17,L_DATASET,0),1)"),
-                   (13, "SCEN_SEL", "IFERROR(MATCH(I19,L_SCEN,0),1)"),
+        helpers = [(9, "TRACK", 'IFERROR(MATCH(D9,L_TRACK,0),IFERROR(MAX(1,MIN(2,VALUE(LEFT(TRIM(D9&""),1)))),2))'.replace("D9", t)),
+                   (10, "P_DATA", 'IFERROR(MATCH(D15,L_PDATASET,0),IFERROR(MAX(1,MIN(2,VALUE(LEFT(TRIM(D15&""),1)))),1))'),
+                   (11, "PROJECT_MODE", 'IFERROR(MATCH(I15,L_MODE,0),IFERROR(MAX(1,MIN(3,VALUE(LEFT(TRIM(I15&""),1)))),3))'), (12, "DATA_SET", 'IFERROR(MATCH(I17,L_DATASET,0),IFERROR(MAX(1,MIN(3,VALUE(LEFT(TRIM(I17&""),1)))),1))'),
+                   (13, "SCEN_SEL", 'IFERROR(MATCH(I19,L_SCEN,0),IFERROR(MAX(1,MIN(4,VALUE(LEFT(TRIM(I19&""),1)))),1))'),
                    (14, "MODE_NAME", 'CHOOSE(PROJECT_MODE,"Sell","Hold","Mixed")'),
                    (15, "SCEN_NAME", 'CHOOSE(SCEN,"Base","Upside","Downside","Lender")'),
                    (16, "UNIT_LBL", '"ETB \'000"'),

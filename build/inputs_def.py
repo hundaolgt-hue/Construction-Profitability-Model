@@ -41,11 +41,11 @@ SPACE_TYPES_AM = ["የንግድ ሱቅ", "ቢሮ", "መኖሪያ", "ማሳያ / 
 T_HOTEL, T_RES, T_OWN, T_FREE = 7, 3, 9, 10      # codes (1-based)
 
 LISTS = {
-    "L_TRACK": ["Private residence – cost estimate & home loan · የግል መኖሪያ ቤት",
-                "Commercial project – full profitability · የንግድ ፕሮጀክት"],
+    "L_TRACK": ["1 – Private residence (cost estimate & home loan) · የግል መኖሪያ ቤት",
+                "2 – Commercial project (full profitability) · የንግድ ፕሮጀክት"],
     "L_MODE": ["1 – Build-to-Sell · ለሽያጭ መገንባት",
                "2 – Build-to-Rent / Hold · ለኪራይ መገንባት",
-               "3 – Mixed (sell part, hold part) · ቅይጥ"],
+               "3 – Mixed (sell part + hold part) · ቅይጥ"],
     "L_DATASET": ["1 – My project · የእኔ ፕሮጀክት", "2 – SAMPLE 1: B+G+8 mixed-use · ምሳሌ 1",
                   "3 – SAMPLE 2: B+G+10 trade centre & hotel · ምሳሌ 2"],
     "L_PDATASET": ["1 – My house · የእኔ ቤት", "2 – SAMPLE: G+1 family house · ምሳሌ ቤት"],
