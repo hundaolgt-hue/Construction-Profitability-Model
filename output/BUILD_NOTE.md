@@ -8,7 +8,7 @@
 | `Rapha_Model_Tutorial_AM.pdf` | 34-page Amharic guide with a private path, a commercial path, Google Sheets use, two worked examples and a glossary. |
 
 ## What changed from v1
-- **Track choice on Start.**
+- **Track choice on Start.** Each choice greys out the other card and its "open" button. Every sheet of the track not chosen shows an amber header band saying it is not in use.
   - Private residence: separate sheets P1 Inputs, P2 Calc, P3 Estimate and P4 Checks, with their own cost library, monthly cost and funding, a vertical 240-month loan schedule and an affordability test.
   - Commercial project: type 1 Sell, 2 Hold or 3 Mixed. No personal fields (household income, savings and home loan moved to the private track).
 - **13 Spaces rent roll.**
@@ -34,7 +34,7 @@
 
 ## Size
 - 31 sheets (30 visible, plus a hidden `Lists` sheet).
-- 598 named ranges, 24,042 formulas and 102 static links.
+- 598 named ranges, 24,041 formulas and 104 static links.
 - Checks: commercial 25 (16 errors, 9 warnings); private 12 (8 errors, 4 warnings).
 
 ## Results (Base)

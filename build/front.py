@@ -222,7 +222,7 @@ def add_validations(b):
     for sheet, typ, arg, rng in b.DV:
         ws = b.wb[sheet]
         if typ == "list":
-            dv = DataValidation(type="list", formula1=f"={b.LIST_RANGE[arg]}", allow_blank=True)
+            dv = DataValidation(type="list", formula1=b.LIST_RANGE[arg], allow_blank=True)
             dv.error = "Pick a value from the list"
             dv.showErrorMessage = True
         else:
@@ -573,7 +573,7 @@ def build_start(b, blank=False):
         for cc in range(c1, c2 + 1):
             ws.cell(r, cc).fill = FILL_INPUT
             ws.cell(r, cc).border = BOX
-        dv = DataValidation(type="list", formula1=f"={b.LIST_RANGE[lst]}", allow_blank=False)
+        dv = DataValidation(type="list", formula1=b.LIST_RANGE[lst], allow_blank=False)
         dv.error = "Pick a value from the list"
         dv.showErrorMessage = True
         ws.add_data_validation(dv)
@@ -599,14 +599,25 @@ def build_start(b, blank=False):
                     "B – a full profitability model for a commercial building. Pick one in step 1, then use that card only.")
         ws["C6"].font = F_NOTE
         # ---- step 1
-        card(ws, 8, 2, 10, 11, bg=CANVAS)
+        card(ws, 8, 2, 11, 11, bg=CANVAS)
         ws["C8"] = "STEP 1 · What are you planning?  ·  ምን እያቀዱ ነው?"
         ws["C8"].font = font(11, True, NAVY)
         t = dd(9, 4, 10, "L_TRACK", LISTS["L_TRACK"][1])
         ws["C9"] = "Choose ▸"
         ws["C9"].font = F_BOLD
-        ws["C10"] = '=IF($P$9=1,"→ Use card A (left). Card B is switched off.","→ Use card B (right). Card A is switched off.")'
+        ws["C10"] = ('=IF($P$9=1,"✔ PRIVATE RESIDENCE selected → use card A (left). Card B and the commercial sheets are switched off.",'
+                     '"✔ COMMERCIAL PROJECT selected → use card B (right). Card A and the P-sheets are switched off.")')
         ws["C10"].font = font(10, True, AMBER)
+        go_a = link(ws, 11, 3, "P3_Estimate", "▶ A · Open my house estimate", font(10, True, "FFFFFF", underline="single"),
+                    align="center")
+        go_a.fill = fill(TEAL)
+        go_b = link(ws, 11, 8, "01_Dashboard", "▶ B · Open the Dashboard", font(10, True, "FFFFFF", underline="single"),
+                    align="center")
+        go_b.fill = fill(BLUE)
+        ws.row_dimensions[11].height = 22
+        # the button of the track that is not chosen is greyed out (rules read the TRACK helper on this sheet)
+        ws.conditional_formatting.add("C11", FormulaRule(formula=["$P$9<>1"], fill=fill("ECEEF1"), font=Font(color="9AA3AF")))
+        ws.conditional_formatting.add("H11", FormulaRule(formula=["$P$9<>2"], fill=fill("ECEEF1"), font=Font(color="9AA3AF")))
         # ---- helpers (column P) – every conditional format on this sheet reads only these cells
         ws["O8"] = "helpers"
         ws["O8"].font = font(8, False, SEC)

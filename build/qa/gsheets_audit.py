@@ -34,6 +34,8 @@ for ws in wb.worksheets:
     for dv in ws.data_validations.dataValidation:
         if dv.type == "list" and dv.formula1 and "!" not in dv.formula1 and not dv.formula1.startswith('"'):
             issues.append(f"{ws.title} DV {dv.sqref}: {dv.formula1}")
+        if dv.formula1 and str(dv.formula1).startswith("="):
+            issues.append(f"{ws.title} DV {dv.sqref}: list source must not start with '=' ({dv.formula1})")
 for n in names:
     if re.fullmatch(r"[A-Za-z]{1,3}\d+(_.*)?", n) or re.fullmatch(r"[Rr]\d*[Cc]\d*", n):
         issues.append(f"name looks like a cell reference: {n}")

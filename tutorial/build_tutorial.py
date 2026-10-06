@@ -216,6 +216,10 @@ def build(C, H, P, toc_pages=None):
 በእያንዳንዱ ገጽ ቀኝ ላይኛው ጥግ <b>«◂ Start»</b> ወደ መጀመሪያ ገጽ ይመልስዎታል፤ ከሥሩ ያለው <b>«Dashboard ▸»</b> (ለንግድ ገጾች) ወይም
 <b>«Estimate ▸»</b> (ለግል ቤት ገጾች) ወደ ዋናው ሪፖርት ይወስድዎታል። በስሪት 1 እነዚህ አገናኞች በቀመር (HYPERLINK) ስለነበሩ በGoogle Sheets አይሠሩም ነበር፤
 አሁን ቀመር ስላልሆኑ በExcel፣ በLibreOffice እና በGoogle Sheets እኩል ይሠራሉ።</p>
+<h2>ምርጫው በሁሉም ገጾች ይታያል</h2>
+<p>ደረጃ 1ን ሲቀይሩ፡ (1) ያልተመረጠው ካርድና ቁልፉ በግራጫ ይጠፋሉ፤ (2) ከደረጃ 1 በታች ያሉት <b>«▶ A · Open my house estimate»</b> እና
+<b>«▶ B · Open the Dashboard»</b> ቁልፎች በቀጥታ ወደ ዋናው ሪፖርት ይወስዱዎታል፤ (3) ያልተመረጠው ክፍል ገጾች ራስጌ <b style="color:#D98E2B">ብርቱካናማ</b>
+ሆኖ «⚠ … is selected on Start – this sheet belongs to the … track (not in use)» ይላል። ስለዚህ በስህተት የሌላውን ክፍል ገጽ እያነበቡ መሆኑን ወዲያውኑ ያውቃሉ።</p>
 <div class="box"><b class="t">ጠቃሚ ምክር</b>ሁለቱም ክፍሎች ሁልጊዜ ይሰላሉ — መንገድ መምረጥ የሚወስነው የትኛው ካርድ ንቁ ሆኖ እንደሚታይ ብቻ ነው። ስለዚህ የቤት ግምትዎንና የንግድ ፕሮጀክትዎን
 በአንድ ፋይል ውስጥ አብረው ማስቀመጥ ይችላሉ።</div>
 </div>""")

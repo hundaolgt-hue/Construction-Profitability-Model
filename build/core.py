@@ -340,11 +340,20 @@ def header(b, sh, ncols_vis=None, start_link=True, period_hdr=True):
     private = sh.name.startswith("P") and sh.name[1].isdigit()
     if sh.name == "00_Start":
         p = ws.cell(3, 2, "A · Private residence   |   B · Commercial project   |   Excel · LibreOffice · Google Sheets")
+    elif sh.name == "61_Glossary":
+        p = ws.cell(3, 2, "Shared by both tracks  ·  ለሁለቱም ክፍሎች የጋራ")
     elif private:
-        p = ws.cell(3, 2, '=P_NAME&"   |   Private residence – cost estimate & home loan"')
+        p = ws.cell(3, 2, '=IF(TRACK=2,"⚠ COMMERCIAL PROJECT is selected on Start – this sheet belongs to the Private residence track '
+                          '(not in use)  ·  ይህ ገጽ ለግል ቤት ነው",P_NAME&"   |   Private residence – cost estimate & home loan")')
     else:
-        p = ws.cell(3, 2, '=PROJ_NAME&"   |   Type: "&MODE_NAME&"   |   Scenario: "&SCEN_NAME')
+        p = ws.cell(3, 2, '=IF(TRACK=1,"⚠ PRIVATE RESIDENCE is selected on Start – this sheet belongs to the Commercial track '
+                          '(not in use)  ·  ይህ ገጽ ለንግድ ፕሮጀክት ነው",PROJ_NAME&"   |   Type: "&MODE_NAME&"   |   Scenario: "&SCEN_NAME)')
     p.font = font(9, False, "D6DEE8")
+    if sh.name not in ("00_Start", "61_Glossary"):
+        # header band turns amber when the sheet belongs to the track NOT chosen on Start (rule reads only this sheet's B3)
+        from openpyxl.formatting.rule import FormulaRule
+        ws.conditional_formatting.add(f"A3:{CL(last)}3", FormulaRule(formula=['LEFT($B$3,1)="⚠"'], fill=fill(AMBER),
+                                                                       font=Font(color="FFFFFF", bold=True)))
     if start_link and sh.name != "00_Start":
         # static internal hyperlinks (work in Excel, LibreOffice and Google Sheets – no HYPERLINK() formula)
         link(ws, 1, last, "00_Start", "◂ Start", font(10, True, "FFFFFF", underline="single"))
